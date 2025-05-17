@@ -1,0 +1,6 @@
+caseprep-ai/
+├── app.py
+├── uploads/
+├── templates/
+│   ├── index.html
+│   ├── result.html

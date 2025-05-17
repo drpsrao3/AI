@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CasePrep AI</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        h1 { color: #333; }
+        .upload-box { margin: 20px auto; padding: 20px; border: 1px solid #ccc; width: 300px; }
+        input[type="file"] { margin: 10px; }
+        button { padding: 10px 20px; background: #007BFF; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>CasePrep AI: Smart Case Summarizer</h1>
+    <div class="upload-box">
+        <form action="/upload" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".pdf" required>
+            <br>
+            <button type="submit">Summarize Case</button>
+        </form>
+    </div>
+</body>
+</html>
