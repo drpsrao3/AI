@@ -1,6 +1,8 @@
 caseprep-ai/
 ├── app.py
-├── uploads/
+├── requirements.txt
+├── render.yaml
 ├── templates/
 │   ├── index.html
-│   ├── result.html
+│   └── result.html
+└── .gitignore
