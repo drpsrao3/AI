@@ -9,4 +9,3 @@ torch==1.13.0
 tf-keras==2.15.0
 gunicorn==20.1.0
 python-dotenv==1.0.0
-en-core-web-sm==3.4.0
