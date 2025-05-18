@@ -6,4 +6,5 @@ spacy==3.4.0
 torch==1.13.0
 tf-keras==2.15.0
 gunicorn==20.1.0
-numpy==1.23.5  # Critical fix for spaCy compatibility
+numpy==1.23.5
+pydantic==1.8.2  # Critical fix for spaCy compatibility
