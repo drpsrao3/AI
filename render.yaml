@@ -1,14 +1,20 @@
 services:
-- type: web
-  name: AI
-  runtime: python
-  repo: https://github.com/drpsrao3/AI
-  plan: starter  # Minimum required for spaCy
-  region: oregon
-  buildCommand: pip install -r requirements.txt
-  startCommand: gunicorn --workers=1 --threads=2 --timeout=120 app:app
-  envVars:
-    - key: PORT
-      value: 10000
-  autoDeployTrigger: commit
+  - type: web
+    name: AI
+    runtime: python
+    repo: https://github.com/drpsrao3/AI
+    plan: starter
+    region: oregon
+    buildCommand: |
+      pip install -r requirements.txt
+      # Only copy templates if you have them
+      if [ -d "templates" ]; then
+        mkdir -p /opt/render/project/src/templates
+        cp -r templates/* /opt/render/project/src/templates/
+      fi
+    startCommand: gunicorn --workers=1 --threads=2 --timeout=120 --bind 0.0.0.0:$PORT app:app
+    envVars:
+      - key: PORT
+        value: 10000
+    autoDeployTrigger: commit
 version: "1"
