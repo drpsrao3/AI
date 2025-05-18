@@ -82,4 +82,5 @@ def upload_file():
     return render_template('result.html', summary="Invalid file format (PDF required)", tags={})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 10000))  # Use Render's PORT or default to 10000
+    app.run(host='0.0.0.0', port=port)  # Updated for production
