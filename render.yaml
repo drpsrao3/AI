@@ -1,16 +1,7 @@
 services:
-- type: web
-  name: AI
-  runtime: python
-  repo: https://github.com/drpsrao3/AI
-  plan: free
-  region: oregon
-  buildCommand: |
-    pip install -r requirements.txt
-    python -m spacy download en_core_web_sm
-  startCommand: gunicorn --bind :$PORT --workers 4 app:app
-  envVars:
-    - key: PORT
-      value: 10000
-  autoDeployTrigger: commit
-version: "1"
+  - type: web
+    name: ai-law-app
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    env: python
