@@ -1,20 +1,33 @@
 from flask import Flask, request, render_template
 import PyPDF2
-from transformers import pipeline
-import spacy
 import os
+import spacy
+from transformers import pipeline
 
 app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Initialize AI models
-summarizer = pipeline("summarization", model="facebook/bart-large-cnn", framework="pt")
-nlp = spacy.load("en_core_web_sm")
-
 # Ensure upload folder exists
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+
+# Lazy loading: models initialized only when first needed
+summarizer = None
+nlp = None
+
+def load_summarizer():
+    global summarizer
+    if summarizer is None:
+        # Use a lighter model to avoid OOM
+        summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6", framework="pt")
+    return summarizer
+
+def load_nlp():
+    global nlp
+    if nlp is None:
+        nlp = spacy.load("en_core_web_sm")
+    return nlp
 
 def extract_text_from_pdf(pdf_path):
     try:
@@ -31,8 +44,9 @@ def extract_text_from_pdf(pdf_path):
 
 def summarize_text(text):
     try:
-        max_chunk = 1000  # BART token limit for summarization
-        text = text[:4000]  # Limit input for speed
+        summarizer = load_summarizer()
+        max_chunk = 1000
+        text = text[:4000]
         chunks = [text[i:i+max_chunk] for i in range(0, len(text), max_chunk)]
         summaries = []
         for chunk in chunks:
@@ -44,7 +58,8 @@ def summarize_text(text):
 
 def tag_entities(text):
     try:
-        doc = nlp(text[:10000])  # Limit for performance
+        nlp = load_nlp()
+        doc = nlp(text[:10000])
         tags = {"Parties": [], "Dates": [], "Laws": []}
         for ent in doc.ents:
             if ent.label_ in ["PERSON", "ORG"]:
@@ -58,8 +73,8 @@ def tag_entities(text):
         return {"Error": f"Error tagging entities: {str(e)}"}
 
 @app.route('/')
-def index():
-    return render_template('index.html')
+def home():
+    return "AI Law Service Running"
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -82,5 +97,5 @@ def upload_file():
     return render_template('result.html', summary="Invalid file format (PDF required)", tags={})
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))  # Use Render's PORT or default to 10000
-    app.run(host='0.0.0.0', port=port)  # Updated for production
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
