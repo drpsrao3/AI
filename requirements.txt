@@ -1,5 +1,5 @@
 flask==2.0.1
-werkzeug==2.0.3
+werkzeug==2.0.3  # Critical fix - pins Werkzeug to v2.x
 pypdf2==3.0.1
 transformers==4.25.1
 spacy==3.4.0
