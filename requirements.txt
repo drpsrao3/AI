@@ -1,6 +1,6 @@
 flask==2.0.1
 werkzeug==2.0.3
-pydantic==1.8.2
+pydantic<2.0.0
 numpy==1.23.5
 spacy==3.4.0
 pypdf2==3.0.1
