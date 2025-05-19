@@ -2,40 +2,82 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Case Summary</title>
+    <title>Analysis Results – {{ original_filename }}</title>
     <style>
-        body { font-family: Arial, sans-serif; padding: 50px; }
-        h1 { color: #333; }
-        .summary, .tags { margin: 20px; padding: 20px; border: 1px solid #ccc; }
-        .tags ul { list-style: none; padding: 0; }
-        .tags li { margin: 5px 0; }
-        a { color: #007BFF; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .error { color: red; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f9;
+            color: #333;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+        }
+
+        h2 {
+            margin-top: 30px;
+            color: #34495e;
+        }
+
+        h3 {
+            margin-top: 15px;
+            color: #5d6d7e;
+        }
+
+        ul {
+            padding-left: 20px;
+        }
+
+        a.button {
+            display: inline-block;
+            margin-top: 30px;
+            padding: 10px 20px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+        }
+
+        a.button:hover {
+            background-color: #2980b9;
+        }
+
+        .tag-list {
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
-    <h1>Case Summary</h1>
-    <div class="summary">
+    <div class="container">
+        <h1>Analysis Results for: <em>{{ original_filename }}</em></h1>
+        
         <h2>Summary</h2>
-        {% if summary.startswith("Error") %}
-            <p class="error">{{ summary }}</p>
-        {% else %}
-            <p>{{ summary }}</p>
-        {% endif %}
+        <p>{{ summary }}</p>
+        
+        <h2>Key Entities</h2>
+        {% for category, entities in tags.items() %}
+            {% if entities %}
+                <h3>{{ category }}</h3>
+                <ul class="tag-list">
+                    {% for entity in entities %}
+                        <li>{{ entity }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endfor %}
+        
+        <a href="/" class="button">Analyze Another PDF</a>
     </div>
-    <div class="tags">
-        <h2>Tagged Entities</h2>
-        {% if tags.Error %}
-            <p class="error">{{ tags.Error }}</p>
-        {% else %}
-            <ul>
-                <li><strong>Parties:</strong> {{ tags.Parties|join(", ") or "None" }}</li>
-                <li><strong>Dates:</strong> {{ tags.Dates|join(", ") or "None" }}</li>
-                <li><strong>Laws:</strong> {{ tags.Laws|join(", ") or "None" }}</li>
-            </ul>
-        {% endif %}
-    </div>
-    <a href="/">Upload Another Case</a>
 </body>
 </html>
