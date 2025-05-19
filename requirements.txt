@@ -10,3 +10,4 @@ transformers==4.25.1
 pypdf2==3.0.1
 thinc==8.1.12
 python-dotenv==1.0.0
+Werkzeug==2.2.3
