@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template, redirect, url_for, flash
-import PyPDF2
 import os
 import spacy
+import pdfplumber  # Added for PDF text extraction
 from transformers import pipeline
 from werkzeug.utils import secure_filename
 import logging
@@ -11,7 +11,7 @@ app = Flask(__name__, template_folder='templates')
 app.secret_key = os.urandom(24)  # Secret key for flash messages
 
 # Configuration
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER = 'Uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
@@ -66,17 +66,12 @@ def extract_text_from_pdf(pdf_path):
     try:
         logger.info(f"Extracting text from PDF: {pdf_path}")
         start_time = time.time()
-        
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            text = " ".join([page.extract_text() or "" for page in reader.pages])
-            
-            if not text.strip():
-                return "Error: PDF contains no extractable text"
-            
-            logger.info(f"Text extraction completed in {time.time() - start_time:.2f}s")
-            return text
-            
+        with pdfplumber.open(pdf_path) as pdf:
+            text = " ".join([page.extract_text() or "" for page in pdf.pages])
+        if not text.strip():
+            return "Error: PDF contains no extractable text"
+        logger.info(f"Text extraction completed in {time.time() - start_time:.2f}s, length: {len(text)} characters")
+        return text
     except Exception as e:
         error_msg = f"Error extracting text: {str(e)}"
         logger.error(error_msg)
@@ -115,7 +110,7 @@ def summarize_legal_text(text):
         chunks = [text[i:i+max_chunk] for i in range(0, len(text), max_chunk)]
         
         summaries = []
-        for i, chunk in enumerate(chunks[:5]):  # Limit to 5 chunks max
+        for i, chunk in enumerate(chunks[:10]):  # Limit to 10 chunks max
             try:
                 summary = summarizer(
                     chunk,
@@ -148,8 +143,8 @@ def extract_legal_entities(text):
         start_time = time.time()
         nlp = load_nlp()
         
-        # Process first 20k characters for efficiency
-        doc = nlp(text[:20000])
+        # Process first 50k characters for efficiency
+        doc = nlp(text[:50000])
         
         legal_tags = {
             "Parties": set(),
