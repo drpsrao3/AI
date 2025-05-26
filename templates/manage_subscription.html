@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manage Subscription</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .btn { padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Manage Subscription</h1>
+    <p>Status: {{ subscription.status | default('Unknown') }}</p>
+    <p>Plan: {{ subscription.plan_id | default('None') }}</p>
+    <a href="{{ url_for('index') }}" class="btn">Back</a>
+</body>
+</html>
