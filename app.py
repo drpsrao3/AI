@@ -6,11 +6,14 @@ from flask_bcrypt import Bcrypt
 import os
 import spacy
 import pdfplumber
+import PyPDF2
 from transformers import pipeline
 from werkzeug.utils import secure_filename
 import logging
 import time
 import razorpay
+import requests
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
 
 # Setup logging with more detail
@@ -35,7 +38,8 @@ if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.instance_path = None
+app.instance_path = os.path.join(os.path.dirname(__file__), 'instance')
+os.makedirs(app.instance_path, exist_ok=True)
 
 # Initialize SQLAlchemy, Migrate, and Bcrypt
 db = SQLAlchemy(app)
@@ -118,6 +122,11 @@ def extract_text_from_pdf(pdf_path):
         start_time = time.time()
         with pdfplumber.open(pdf_path) as pdf:
             text = " ".join([page.extract_text() or "" for page in pdf.pages])
+        if not text.strip():
+            logger.warning("pdfplumber extracted no text, falling back to PyPDF2")
+            with open(pdf_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                text = " ".join([page.extract_text() or "" for page in reader.pages])
         if not text.strip():
             return "Error: PDF contains no extractable text"
         logger.info(f"Text extraction completed in {time.time() - start_time:.2f}s, length: {len(text)} characters")
@@ -237,15 +246,12 @@ def login():
         if request.method == 'POST':
             username = request.form.get('username')
             password = request.form.get('password')
-            # Check for None before trimming
             if username is None or password is None:
                 flash('Username and password are required', 'error')
                 return redirect(url_for('login'))
-            # Trim whitespace from both username and password
             username = username.strip()
             password = password.strip()
             logger.debug(f"Login form data: username={username}, password={'set' if password else 'None'}")
-            # Check for whitespace issues
             if username != request.form.get('username') or password != request.form.get('password'):
                 flash('Please remove any leading or trailing spaces in your username or password', 'error')
                 return redirect(url_for('login'))
@@ -277,15 +283,12 @@ def register():
         if request.method == 'POST':
             username = request.form.get('username')
             password = request.form.get('password')
-            # Check for None before trimming
             if username is None or password is None:
                 flash('Username and password are required', 'error')
                 return redirect(url_for('register'))
-            # Trim whitespace from both username and password
             username = username.strip()
             password = password.strip()
             logger.debug(f"Register attempt: username={username}, password={'set' if password else 'None'}")
-            # Check for whitespace issues
             if username != request.form.get('username') or password != request.form.get('password'):
                 flash('Please remove any leading or trailing spaces in your username or password', 'error')
                 return redirect(url_for('register'))
@@ -329,28 +332,52 @@ def logout():
 def create_subscription():
     try:
         if not current_user.razorpay_customer_id:
-            customer = razorpay_client.customer.create({
-                'name': current_user.username,
-                'email': f'{current_user.username}@example.com',
-            })
+            @retry(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=2, max=10),
+                retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+            )
+            def create_customer():
+                return razorpay_client.customer.create({
+                    'name': current_user.username,
+                    'email': f'{current_user.username}@example.com',
+                })
+            
+            customer = create_customer()
             current_user.razorpay_customer_id = customer['id']
             db.session.commit()
         else:
             customer = razorpay_client.customer.retrieve(current_user.razorpay_customer_id)
 
-        subscription = razorpay_client.subscription.create({
-            'plan_id': 'plan_1234567890',  # Replace with your Plan ID
-            'customer_id': customer['id'],
-            'total_count': 12,
-            'quantity': 1,
-            'notes': {'user_id': current_user.id}
-        })
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+        )
+        def create_subscription_call():
+            return razorpay_client.subscription.create({
+                'plan_id': 'plan_ABC123XYZ',  # Replace with your actual Plan ID
+                'customer_id': customer['id'],
+                'total_count': 12,
+                'quantity': 1,
+                'notes': {'user_id': current_user.id}
+            })
+
+        subscription = create_subscription_call()
         logger.debug(f"Subscription created: {subscription['id']}")
         return render_template('payment.html', 
                               subscription_id=subscription['id'],
                               key_id=os.getenv('RAZORPAY_KEY_ID'))
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Network error while creating subscription: {str(e)}")
+        flash("Failed to connect to payment gateway. Please try again later.", 'error')
+        return redirect(url_for('index'))
+    except razorpay.errors.BadRequestError as e:
+        logger.error(f"Razorpay API error: {str(e)}")
+        flash(f"Payment error: {str(e)}", 'error')
+        return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f"Error creating subscription: {str(e)}")
+        logger.error(f"Unexpected error creating subscription: {str(e)}")
         flash(f"Error creating subscription: {str(e)}", 'error')
         return redirect(url_for('index'))
 

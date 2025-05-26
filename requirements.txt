@@ -58,6 +58,7 @@ spacy-loggers==1.0.5
 SQLAlchemy==2.0.41
 srsly==2.5.1
 sympy==1.14.0
+tenacity==9.1.2
 tf-keras==2.15.0
 thinc==8.1.12
 tokenizers==0.13.3
