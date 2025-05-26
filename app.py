@@ -94,13 +94,13 @@ def load_summarizer():
         try:
             summarizer = pipeline(
                 "summarization",
-                model="facebook/bart-large-cnn",
+                model="facebook/bart-base",  # Changed to smaller model
                 framework="pt",
                 device=-1
             )
             logger.info("Summarization model loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load summarizer: {str(e)}")
+            logger.error(f"Failed to load summarizer: {str(e)}", exc_info=True)
             raise
     return summarizer
 
@@ -112,7 +112,7 @@ def load_nlp():
             nlp = spacy.load("en_core_web_sm")
             logger.info("NLP model loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load NLP model: {str(e)}")
+            logger.error(f"Failed to load NLP model: {str(e)}", exc_info=True)
             raise
     return nlp
 
@@ -133,7 +133,7 @@ def extract_text_from_pdf(pdf_path):
         return text
     except Exception as e:
         error_msg = f"Error extracting text: {str(e)}"
-        logger.error(error_msg)
+        logger.error(error_msg, exc_info=True)
         return error_msg
 
 def preprocess_text(text):
@@ -147,7 +147,7 @@ def preprocess_text(text):
             text = text.replace(phrase, "")
         return text.strip()
     except Exception as e:
-        logger.error(f"Error in preprocessing: {str(e)}")
+        logger.error(f"Error in preprocessing: {str(e)}", exc_info=True)
         return text
 
 def summarize_legal_text(text):
@@ -155,24 +155,24 @@ def summarize_legal_text(text):
         logger.info("Starting text summarization...")
         start_time = time.time()
         summarizer = load_summarizer()
-        text = preprocess_text(text)[:100000]
-        max_chunk = 1024
+        text = preprocess_text(text)[:50000]  # Reduced from 100000
+        max_chunk = 512  # Reduced from 1024
         chunks = [text[i:i+max_chunk] for i in range(0, len(text), max_chunk)]
         summaries = []
-        chunk_limit = 10 if current_user.subscription_status == 'active' else 5
+        chunk_limit = 5 if current_user.subscription_status == 'active' else 2  # Reduced from 10/5
         for i, chunk in enumerate(chunks[:chunk_limit]):
             try:
                 summary = summarizer(
                     chunk,
-                    max_length=300,
-                    min_length=150,
+                    max_length=150,  # Reduced from 300
+                    min_length=75,   # Reduced from 150
                     do_sample=False,
                     truncation=True
                 )[0]['summary_text']
                 summaries.append(summary)
                 logger.debug(f"Processed chunk {i+1}/{len(chunks)}")
             except Exception as e:
-                logger.warning(f"Error summarizing chunk {i+1}: {str(e)}")
+                logger.warning(f"Error summarizing chunk {i+1}: {str(e)}", exc_info=True)
                 continue
         if not summaries:
             return "Error: Could not generate any summary chunks"
@@ -181,7 +181,7 @@ def summarize_legal_text(text):
         return full_summary
     except Exception as e:
         error_msg = f"Error summarizing text: {str(e)}"
-        logger.error(error_msg)
+        logger.error(error_msg, exc_info=True)
         return error_msg
 
 def extract_legal_entities(text):
@@ -189,7 +189,7 @@ def extract_legal_entities(text):
         logger.info("Extracting legal entities...")
         start_time = time.time()
         nlp = load_nlp()
-        char_limit = 100000 if current_user.subscription_status == 'active' else 50000
+        char_limit = 25000 if current_user.subscription_status == 'active' else 10000  # Reduced from 100000/50000
         doc = nlp(text[:char_limit])
         legal_tags = {
             "Parties": set(),
@@ -228,7 +228,7 @@ def extract_legal_entities(text):
         return result
     except Exception as e:
         error_msg = f"Error extracting entities: {str(e)}"
-        logger.error(error_msg)
+        logger.error(error_msg, exc_info=True)
         return {"Error": error_msg}
 
 @app.route('/', methods=['GET'])
@@ -237,7 +237,7 @@ def index():
         logger.debug("Rendering index page")
         return render_template('index.html')
     except Exception as e:
-        logger.error(f"Error rendering index page: {str(e)}")
+        logger.error(f"Error rendering index page: {str(e)}", exc_info=True)
         return "Internal Server Error", 500
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -274,7 +274,7 @@ def login():
         logger.debug("Rendering login page")
         return render_template('login.html')
     except Exception as e:
-        logger.error(f"Error in login route: {str(e)}")
+        logger.error(f"Error in login route: {str(e)}", exc_info=True)
         return "Internal Server Error", 500
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -308,12 +308,12 @@ def register():
             except Exception as e:
                 db.session.rollback()
                 flash(f'Registration failed: {str(e)}', 'error')
-                logger.error(f"Registration error: {str(e)}")
+                logger.error(f"Registration error: {str(e)}", exc_info=True)
                 return redirect(url_for('register'))
         logger.debug("Rendering register page")
         return render_template('register.html')
     except Exception as e:
-        logger.error(f"Error in register route: {str(e)}")
+        logger.error(f"Error in register route: {str(e)}", exc_info=True)
         return "Internal Server Error", 500
 
 @app.route('/logout')
@@ -324,7 +324,7 @@ def logout():
         flash('Logged out successfully', 'success')
         return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f"Error in logout route: {str(e)}")
+        logger.error(f"Error in logout route: {str(e)}", exc_info=True)
         return "Internal Server Error", 500
 
 @app.route('/create-subscription', methods=['POST'])
@@ -369,15 +369,15 @@ def create_subscription():
                               subscription_id=subscription['id'],
                               key_id=os.getenv('RAZORPAY_KEY_ID'))
     except requests.exceptions.ConnectionError as e:
-        logger.error(f"Network error while creating subscription: {str(e)}")
+        logger.error(f"Network error while creating subscription: {str(e)}", exc_info=True)
         flash("Failed to connect to payment gateway. Please try again later.", 'error')
         return redirect(url_for('index'))
     except razorpay.errors.BadRequestError as e:
-        logger.error(f"Razorpay API error: {str(e)}")
+        logger.error(f"Razorpay API error: {str(e)}", exc_info=True)
         flash(f"Payment error: {str(e)}", 'error')
         return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f"Unexpected error creating subscription: {str(e)}")
+        logger.error(f"Unexpected error creating subscription: {str(e)}", exc_info=True)
         flash(f"Error creating subscription: {str(e)}", 'error')
         return redirect(url_for('index'))
 
@@ -396,15 +396,18 @@ def payment_success():
             flash('Subscription not activated', 'error')
         return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f"Error in payment-success route: {str(e)}")
+        logger.error(f"Error in payment-success route: {str(e)}", exc_info=True)
         flash(f"Payment error: {str(e)}", 'error')
         return redirect(url_for('index'))
 
 @app.route('/webhook', methods=['POST'])
 def razorpay_webhook():
     try:
+        logger.info("Received webhook request")
         payload = request.get_json()
+        logger.debug(f"Webhook payload: {payload}")
         event = payload['event']
+        logger.info(f"Webhook event: {event}")
         if event == 'subscription.activated':
             subscription = payload['payload']['subscription']['entity']
             customer_id = subscription['customer_id']
@@ -414,6 +417,8 @@ def razorpay_webhook():
                 user.subscription_status = 'active'
                 db.session.commit()
                 logger.info(f"Subscription activated for user {user.username}")
+            else:
+                logger.warning(f"No user found with customer_id: {customer_id}")
         elif event == 'subscription.cancelled':
             subscription = payload['payload']['subscription']['entity']
             customer_id = subscription['customer_id']
@@ -422,9 +427,11 @@ def razorpay_webhook():
                 user.subscription_status = 'inactive'
                 db.session.commit()
                 logger.info(f"Subscription cancelled for user {user.username}")
+            else:
+                logger.warning(f"No user found with customer_id: {customer_id}")
         return jsonify({'status': 'success'}), 200
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
+        logger.error(f"Webhook error: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 400
 
 @app.route('/manage-subscription')
@@ -437,7 +444,7 @@ def manage_subscription():
         flash('No active subscription', 'error')
         return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f"Error in manage-subscription route: {str(e)}")
+        logger.error(f"Error in manage-subscription route: {str(e)}", exc_info=True)
         return "Internal Server Error", 500
 
 @app.route('/upload', methods=['POST'])
@@ -466,7 +473,7 @@ def upload_file():
             logger.info(f"File saved temporarily at: {filepath}")
         except Exception as e:
             flash('Failed to save file', 'error')
-            logger.error(f"File save error: {str(e)}")
+            logger.error(f"File save error: {str(e)}", exc_info=True)
             return redirect(url_for('index'))
         try:
             text = extract_text_from_pdf(filepath)
@@ -490,7 +497,7 @@ def upload_file():
             )
         except Exception as e:
             flash(f"Processing error: {str(e)}", 'error')
-            logger.error(f"Processing error: {str(e)}")
+            logger.error(f"Processing error: {str(e)}", exc_info=True)
             return redirect(url_for('index'))
         finally:
             try:
@@ -498,9 +505,9 @@ def upload_file():
                     os.remove(filepath)
                     logger.info(f"Temporary file removed: {filepath}")
             except Exception as e:
-                logger.error(f"Error removing temporary file: {str(e)}")
+                logger.error(f"Error removing temporary file: {str(e)}", exc_info=True)
     except Exception as e:
-        logger.error(f"Unexpected error in upload_file: {str(e)}")
+        logger.error(f"Unexpected error in upload_file: {str(e)}", exc_info=True)
         return "Internal Server Error", 500
 
 # For local development
