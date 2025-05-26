@@ -27,7 +27,7 @@ app = Flask(__name__, template_folder='templates')
 app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
 
 # Configuration
-UPLOAD_FOLDER = 'Uploads'
+UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
@@ -60,7 +60,7 @@ try:
     logger.debug("Razorpay client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Razorpay client: {str(e)}")
-    raise
+    razorpay_client = None  # Set to None to handle cases where Razorpay isn't configured
 
 # Global model instances (load on-demand to save memory)
 summarizer = None
@@ -72,7 +72,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
     razorpay_customer_id = db.Column(db.String(100))
-    subscription_status = db.Column(db.String(20))
+    subscription_status = db.Column(db.String(20), default='inactive')
     subscription_id = db.Column(db.String(100))
     upload_count = db.Column(db.Integer, default=0)
 
@@ -92,11 +92,12 @@ def load_summarizer():
     if summarizer is None:
         logger.info("Loading summarization model...")
         try:
+            # Using a smaller, faster model for summarization
             summarizer = pipeline(
                 "summarization",
-                model="facebook/bart-base",  # Changed to smaller model
+                model="sshleifer/distilbart-cnn-12-6",
                 framework="pt",
-                device=-1
+                device=-1  # Use CPU (-1) to avoid GPU memory issues
             )
             logger.info("Summarization model loaded successfully")
         except Exception as e:
@@ -120,15 +121,28 @@ def extract_text_from_pdf(pdf_path):
     try:
         logger.info(f"Extracting text from PDF: {pdf_path}")
         start_time = time.time()
+        
+        # Try pdfplumber first
+        text = ""
         with pdfplumber.open(pdf_path) as pdf:
-            text = " ".join([page.extract_text() or "" for page in pdf.pages])
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+        
+        # Fallback to PyPDF2 if pdfplumber fails
         if not text.strip():
             logger.warning("pdfplumber extracted no text, falling back to PyPDF2")
             with open(pdf_path, 'rb') as file:
                 reader = PyPDF2.PdfReader(file)
-                text = " ".join([page.extract_text() or "" for page in reader.pages])
+                for page in reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+        
         if not text.strip():
             return "Error: PDF contains no extractable text"
+        
         logger.info(f"Text extraction completed in {time.time() - start_time:.2f}s, length: {len(text)} characters")
         return text
     except Exception as e:
@@ -138,13 +152,18 @@ def extract_text_from_pdf(pdf_path):
 
 def preprocess_text(text):
     try:
+        # Basic cleaning
         text = ' '.join(text.split())
+        
+        # Remove common legal document noise
         noise_phrases = [
             "IN THE COURT OF", "CASE NO.", "JUDGMENT", 
-            "BEFORE THE HON'BLE", "IN THE MATTER OF"
+            "BEFORE THE HON'BLE", "IN THE MATTER OF",
+            "BEFORE THE HONOURABLE", "REPORTABLE", "NON-REPORTABLE"
         ]
         for phrase in noise_phrases:
             text = text.replace(phrase, "")
+        
         return text.strip()
     except Exception as e:
         logger.error(f"Error in preprocessing: {str(e)}", exc_info=True)
@@ -154,18 +173,37 @@ def summarize_legal_text(text):
     try:
         logger.info("Starting text summarization...")
         start_time = time.time()
+        
+        # Get the summarizer instance
         summarizer = load_summarizer()
-        text = preprocess_text(text)[:50000]  # Reduced from 100000
-        max_chunk = 512  # Reduced from 1024
-        chunks = [text[i:i+max_chunk] for i in range(0, len(text), max_chunk)]
+        
+        # Preprocess and limit text size
+        text = preprocess_text(text)
+        
+        # Set limits based on subscription status
+        if current_user.subscription_status == 'active':
+            max_length = 10000  # 10k chars for premium
+            chunk_size = 1000
+            max_chunks = 10
+        else:
+            max_length = 5000   # 5k chars for free
+            chunk_size = 800
+            max_chunks = 5
+        
+        # Truncate text to max length
+        text = text[:max_length]
+        
+        # Split into chunks
+        chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+        chunks = chunks[:max_chunks]  # Limit number of chunks
+        
         summaries = []
-        chunk_limit = 5 if current_user.subscription_status == 'active' else 2  # Reduced from 10/5
-        for i, chunk in enumerate(chunks[:chunk_limit]):
+        for i, chunk in enumerate(chunks):
             try:
                 summary = summarizer(
                     chunk,
-                    max_length=150,  # Reduced from 300
-                    min_length=75,   # Reduced from 150
+                    max_length=150,
+                    min_length=50,
                     do_sample=False,
                     truncation=True
                 )[0]['summary_text']
@@ -174,8 +212,10 @@ def summarize_legal_text(text):
             except Exception as e:
                 logger.warning(f"Error summarizing chunk {i+1}: {str(e)}", exc_info=True)
                 continue
+        
         if not summaries:
             return "Error: Could not generate any summary chunks"
+        
         full_summary = " ".join(summaries)
         logger.info(f"Summarization completed in {time.time() - start_time:.2f}s")
         return full_summary
@@ -188,9 +228,15 @@ def extract_legal_entities(text):
     try:
         logger.info("Extracting legal entities...")
         start_time = time.time()
+        
         nlp = load_nlp()
-        char_limit = 25000 if current_user.subscription_status == 'active' else 10000  # Reduced from 100000/50000
-        doc = nlp(text[:char_limit])
+        
+        # Set text limits based on subscription
+        char_limit = 25000 if current_user.subscription_status == 'active' else 10000
+        text = text[:char_limit]
+        
+        doc = nlp(text)
+        
         legal_tags = {
             "Parties": set(),
             "Judges": set(),
@@ -200,14 +246,16 @@ def extract_legal_entities(text):
             "Case Numbers": set(),
             "Citations": set()
         }
+        
+        # Extract entities
         for ent in doc.ents:
             if ent.label_ == "PERSON":
-                if "J." in ent.text:
+                if "J." in ent.text or "Justice" in ent.text:
                     legal_tags["Judges"].add(ent.text)
                 else:
                     legal_tags["Parties"].add(ent.text)
             elif ent.label_ == "ORG":
-                if "court" in ent.text.lower():
+                if "court" in ent.text.lower() or "high court" in ent.text.lower():
                     legal_tags["Courts"].add(ent.text)
             elif ent.label_ == "DATE":
                 legal_tags["Dates"].add(ent.text)
@@ -216,13 +264,17 @@ def extract_legal_entities(text):
             elif ent.label_ == "CARDINAL":
                 if any(word in ent.text.lower() for word in ["no.", "number"]):
                     legal_tags["Case Numbers"].add(ent.text)
+        
+        # Additional pattern matching
         for sent in doc.sents:
             if " v. " in sent.text:
                 parts = [p.strip() for p in sent.text.split(" v. ")]
                 if len(parts) == 2:
                     legal_tags["Parties"].update(parts)
-            if any(c in sent.text for c in [" U.S. ", " F. ", " S.Ct. "]):
+            if any(c in sent.text for c in [" U.S. ", " F. ", " S.Ct. ", " A.C. "]):
                 legal_tags["Citations"].add(sent.text.strip())
+        
+        # Convert sets to sorted lists
         result = {k: sorted(v) for k, v in legal_tags.items() if v}
         logger.info(f"Entity extraction completed in {time.time() - start_time:.2f}s")
         return result
@@ -238,83 +290,76 @@ def index():
         return render_template('index.html')
     except Exception as e:
         logger.error(f"Error rendering index page: {str(e)}", exc_info=True)
-        return "Internal Server Error", 500
+        return render_template('error.html', message="Internal Server Error"), 500
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     try:
         if request.method == 'POST':
-            username = request.form.get('username')
-            password = request.form.get('password')
-            if username is None or password is None:
-                flash('Username and password are required', 'error')
-                return redirect(url_for('login'))
-            username = username.strip()
-            password = password.strip()
-            logger.debug(f"Login form data: username={username}, password={'set' if password else 'None'}")
-            if username != request.form.get('username') or password != request.form.get('password'):
-                flash('Please remove any leading or trailing spaces in your username or password', 'error')
-                return redirect(url_for('login'))
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '').strip()
+            
             if not username or not password:
                 flash('Username and password are required', 'error')
                 return redirect(url_for('login'))
+            
+            logger.debug(f"Login attempt for username: {username}")
             user = User.query.filter_by(username=username).first()
-            logger.info(f"Login attempt for username: {username}, user found: {user is not None}")
-            if user:
-                logger.debug(f"Stored password hash: {user.password}")
-                password_match = bcrypt.check_password_hash(user.password, password)
-                logger.debug(f"Password match: {password_match}")
-                if password_match:
-                    login_user(user)
-                    logger.info(f"User {username} logged in successfully")
-                    flash('Logged in successfully', 'success')
-                    return redirect(url_for('index'))
+            
+            if user and bcrypt.check_password_hash(user.password, password):
+                login_user(user)
+                logger.info(f"User {username} logged in successfully")
+                flash('Logged in successfully', 'success')
+                next_page = request.args.get('next')
+                return redirect(next_page or url_for('index'))
+            
             flash('Invalid username or password', 'error')
             return redirect(url_for('login'))
-        logger.debug("Rendering login page")
+        
         return render_template('login.html')
     except Exception as e:
         logger.error(f"Error in login route: {str(e)}", exc_info=True)
-        return "Internal Server Error", 500
+        return render_template('error.html', message="Login Error"), 500
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     try:
         if request.method == 'POST':
-            username = request.form.get('username')
-            password = request.form.get('password')
-            if username is None or password is None:
-                flash('Username and password are required', 'error')
-                return redirect(url_for('register'))
-            username = username.strip()
-            password = password.strip()
-            logger.debug(f"Register attempt: username={username}, password={'set' if password else 'None'}")
-            if username != request.form.get('username') or password != request.form.get('password'):
-                flash('Please remove any leading or trailing spaces in your username or password', 'error')
-                return redirect(url_for('register'))
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '').strip()
+            confirm_password = request.form.get('confirm_password', '').strip()
+            
             if not username or not password:
                 flash('Username and password are required', 'error')
                 return redirect(url_for('register'))
+            
+            if password != confirm_password:
+                flash('Passwords do not match', 'error')
+                return redirect(url_for('register'))
+            
             if User.query.filter_by(username=username).first():
                 flash('Username already exists', 'error')
                 return redirect(url_for('register'))
+            
             hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-            user = User(username=username, password=hashed_password, subscription_status='inactive', upload_count=0)
-            try:
-                db.session.add(user)
-                db.session.commit()
-                flash('Registration successful, please log in', 'success')
-                return redirect(url_for('login'))
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Registration failed: {str(e)}', 'error')
-                logger.error(f"Registration error: {str(e)}", exc_info=True)
-                return redirect(url_for('register'))
-        logger.debug("Rendering register page")
+            user = User(
+                username=username,
+                password=hashed_password,
+                subscription_status='inactive',
+                upload_count=0
+            )
+            
+            db.session.add(user)
+            db.session.commit()
+            
+            flash('Registration successful, please log in', 'success')
+            return redirect(url_for('login'))
+        
         return render_template('register.html')
     except Exception as e:
-        logger.error(f"Error in register route: {str(e)}", exc_info=True)
-        return "Internal Server Error", 500
+        db.session.rollback()
+        logger.error(f"Registration error: {str(e)}", exc_info=True)
+        return render_template('error.html', message="Registration Error"), 500
 
 @app.route('/logout')
 @login_required
@@ -325,80 +370,110 @@ def logout():
         return redirect(url_for('index'))
     except Exception as e:
         logger.error(f"Error in logout route: {str(e)}", exc_info=True)
-        return "Internal Server Error", 500
+        return render_template('error.html', message="Logout Error"), 500
 
-@app.route('/create-subscription', methods=['POST'])
+@app.route('/create-subscription', methods=['GET', 'POST'])
 @login_required
 def create_subscription():
     try:
+        if not razorpay_client:
+            flash('Payment system is currently unavailable', 'error')
+            return redirect(url_for('index'))
+        
+        # Create or retrieve customer
         if not current_user.razorpay_customer_id:
-            @retry(
-                stop=stop_after_attempt(3),
-                wait=wait_exponential(multiplier=1, min=2, max=10),
-                retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
-            )
-            def create_customer():
-                return razorpay_client.customer.create({
+            try:
+                customer = razorpay_client.customer.create({
                     'name': current_user.username,
                     'email': f'{current_user.username}@example.com',
+                    'contact': '9000000000'  # Default contact number
                 })
-            
-            customer = create_customer()
-            current_user.razorpay_customer_id = customer['id']
-            db.session.commit()
-        else:
-            customer = razorpay_client.customer.retrieve(current_user.razorpay_customer_id)
-
-        @retry(
-            stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=2, max=10),
-            retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
-        )
-        def create_subscription_call():
-            return razorpay_client.subscription.create({
-                'plan_id': 'plan_ABC123XYZ',  # Replace with your actual Plan ID
-                'customer_id': customer['id'],
+                current_user.razorpay_customer_id = customer['id']
+                db.session.commit()
+            except Exception as e:
+                logger.error(f"Error creating customer: {str(e)}", exc_info=True)
+                flash('Error creating customer record', 'error')
+                return redirect(url_for('index'))
+        
+        # Create subscription
+        try:
+            subscription = razorpay_client.subscription.create({
+                'plan_id': os.getenv('RAZORPAY_PLAN_ID', 'plan_MjA0NzUwV9JqQp'),  # Default test plan
+                'customer_notify': 1,
                 'total_count': 12,
                 'quantity': 1,
-                'notes': {'user_id': current_user.id}
+                'notes': {
+                    'user_id': current_user.id,
+                    'username': current_user.username
+                }
             })
-
-        subscription = create_subscription_call()
-        logger.debug(f"Subscription created: {subscription['id']}")
-        return render_template('payment.html', 
-                              subscription_id=subscription['id'],
-                              key_id=os.getenv('RAZORPAY_KEY_ID'))
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"Network error while creating subscription: {str(e)}", exc_info=True)
-        flash("Failed to connect to payment gateway. Please try again later.", 'error')
-        return redirect(url_for('index'))
-    except razorpay.errors.BadRequestError as e:
-        logger.error(f"Razorpay API error: {str(e)}", exc_info=True)
-        flash(f"Payment error: {str(e)}", 'error')
-        return redirect(url_for('index'))
+            
+            return render_template('payment.html', 
+                                 subscription_id=subscription['id'],
+                                 key_id=os.getenv('RAZORPAY_KEY_ID'),
+                                 username=current_user.username)
+        except Exception as e:
+            logger.error(f"Error creating subscription: {str(e)}", exc_info=True)
+            flash('Error creating subscription', 'error')
+            return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f"Unexpected error creating subscription: {str(e)}", exc_info=True)
-        flash(f"Error creating subscription: {str(e)}", 'error')
-        return redirect(url_for('index'))
+        logger.error(f"Unexpected error in create-subscription: {str(e)}", exc_info=True)
+        return render_template('error.html', message="Subscription Error"), 500
 
 @app.route('/payment-success', methods=['POST'])
 @login_required
 def payment_success():
     try:
         subscription_id = request.form.get('razorpay_subscription_id')
-        subscription = razorpay_client.subscription.fetch(subscription_id)
-        if subscription['status'] == 'active':
-            current_user.subscription_id = subscription_id
-            current_user.subscription_status = 'active'
-            db.session.commit()
-            flash('Subscription successful!', 'success')
-        else:
-            flash('Subscription not activated', 'error')
+        razorpay_payment_id = request.form.get('razorpay_payment_id')
+        razorpay_signature = request.form.get('razorpay_signature')
+        
+        if not all([subscription_id, razorpay_payment_id, razorpay_signature]):
+            flash('Invalid payment response', 'error')
+            return redirect(url_for('index'))
+        
+        # Verify the payment signature
+        params = {
+            'razorpay_subscription_id': subscription_id,
+            'razorpay_payment_id': razorpay_payment_id,
+            'razorpay_signature': razorpay_signature
+        }
+        
+        try:
+            razorpay_client.utility.verify_payment_signature(params)
+            
+            # Fetch subscription details
+            subscription = razorpay_client.subscription.fetch(subscription_id)
+            
+            if subscription['status'] == 'active':
+                current_user.subscription_id = subscription_id
+                current_user.subscription_status = 'active'
+                db.session.commit()
+                flash('Subscription successful!', 'success')
+            else:
+                flash('Subscription not yet activated', 'warning')
+        except Exception as e:
+            logger.error(f"Payment verification failed: {str(e)}", exc_info=True)
+            flash('Payment verification failed', 'error')
+        
         return redirect(url_for('index'))
     except Exception as e:
         logger.error(f"Error in payment-success route: {str(e)}", exc_info=True)
-        flash(f"Payment error: {str(e)}", 'error')
+        return render_template('error.html', message="Payment Error"), 500
+
+@app.route('/payment-failure', methods=['POST'])
+@login_required
+def payment_failure():
+    try:
+        error_code = request.form.get('error_code')
+        error_description = request.form.get('error_description')
+        
+        logger.error(f"Payment failed: {error_code} - {error_description}")
+        flash('Payment failed. Please try again.', 'error')
         return redirect(url_for('index'))
+    except Exception as e:
+        logger.error(f"Error in payment-failure route: {str(e)}", exc_info=True)
+        return render_template('error.html', message="Payment Error"), 500
 
 @app.route('/webhook', methods=['POST'])
 def razorpay_webhook():
@@ -406,12 +481,29 @@ def razorpay_webhook():
         logger.info("Received webhook request")
         payload = request.get_json()
         logger.debug(f"Webhook payload: {payload}")
-        event = payload['event']
-        logger.info(f"Webhook event: {event}")
+        
+        # Verify webhook signature
+        webhook_secret = os.getenv('RAZORPAY_WEBHOOK_SECRET')
+        received_signature = request.headers.get('X-Razorpay-Signature')
+        
+        if webhook_secret:
+            try:
+                razorpay_client.utility.verify_webhook_signature(
+                    request.data.decode('utf-8'),
+                    received_signature,
+                    webhook_secret
+                )
+            except Exception as e:
+                logger.error(f"Webhook signature verification failed: {str(e)}")
+                return jsonify({'status': 'error', 'message': 'Invalid signature'}), 400
+        
+        event = payload.get('event')
+        
         if event == 'subscription.activated':
             subscription = payload['payload']['subscription']['entity']
             customer_id = subscription['customer_id']
             user = User.query.filter_by(razorpay_customer_id=customer_id).first()
+            
             if user:
                 user.subscription_id = subscription['id']
                 user.subscription_status = 'active'
@@ -419,16 +511,19 @@ def razorpay_webhook():
                 logger.info(f"Subscription activated for user {user.username}")
             else:
                 logger.warning(f"No user found with customer_id: {customer_id}")
+                
         elif event == 'subscription.cancelled':
             subscription = payload['payload']['subscription']['entity']
             customer_id = subscription['customer_id']
             user = User.query.filter_by(razorpay_customer_id=customer_id).first()
+            
             if user:
                 user.subscription_status = 'inactive'
                 db.session.commit()
                 logger.info(f"Subscription cancelled for user {user.username}")
             else:
                 logger.warning(f"No user found with customer_id: {customer_id}")
+                
         return jsonify({'status': 'success'}), 200
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}", exc_info=True)
@@ -438,67 +533,106 @@ def razorpay_webhook():
 @login_required
 def manage_subscription():
     try:
-        if current_user.subscription_id:
-            subscription = razorpay_client.subscription.fetch(current_user.subscription_id)
-            return render_template('manage_subscription.html', subscription=subscription)
-        flash('No active subscription', 'error')
-        return redirect(url_for('index'))
+        if not current_user.subscription_id:
+            flash('No active subscription', 'error')
+            return redirect(url_for('index'))
+        
+        subscription = razorpay_client.subscription.fetch(current_user.subscription_id)
+        return render_template('manage_subscription.html', subscription=subscription)
     except Exception as e:
         logger.error(f"Error in manage-subscription route: {str(e)}", exc_info=True)
-        return "Internal Server Error", 500
+        return render_template('error.html', message="Subscription Error"), 500
 
-@app.route('/upload', methods=['POST'])
+@app.route('/cancel-subscription', methods=['POST'])
+@login_required
+def cancel_subscription():
+    try:
+        if not current_user.subscription_id:
+            flash('No active subscription to cancel', 'error')
+            return redirect(url_for('index'))
+        
+        razorpay_client.subscription.cancel(current_user.subscription_id)
+        current_user.subscription_status = 'inactive'
+        db.session.commit()
+        
+        flash('Subscription cancelled successfully', 'success')
+        return redirect(url_for('index'))
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {str(e)}", exc_info=True)
+        return render_template('error.html', message="Cancellation Error"), 500
+
+@app.route('/upload', methods=['GET', 'POST'])
 @login_required
 def upload_file():
     try:
+        if request.method == 'GET':
+            return render_template('upload.html')
+        
+        # Check subscription limits
         if current_user.subscription_status != 'active' and current_user.upload_count >= 5:
             flash('Free plan limit reached. Subscribe to Premium for unlimited uploads.', 'error')
             return redirect(url_for('index'))
         
         if 'file' not in request.files:
             flash('No file part in the request', 'error')
-            return redirect(url_for('index'))
+            return redirect(url_for('upload_file'))
+        
         file = request.files['file']
+        
         if file.filename == '':
             flash('No file selected', 'error')
-            return redirect(url_for('index'))
-        if not file or not allowed_file(file.filename):
+            return redirect(url_for('upload_file'))
+        
+        if not allowed_file(file.filename):
             flash('Only PDF files are allowed', 'error')
-            return redirect(url_for('index'))
+            return redirect(url_for('upload_file'))
+        
+        # Secure filename and create unique path
         filename = secure_filename(file.filename)
         unique_id = str(int(time.time()))
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{filename}")
+        
         try:
             file.save(filepath)
             logger.info(f"File saved temporarily at: {filepath}")
         except Exception as e:
             flash('Failed to save file', 'error')
             logger.error(f"File save error: {str(e)}", exc_info=True)
-            return redirect(url_for('index'))
+            return redirect(url_for('upload_file'))
+        
         try:
+            # Extract text
             text = extract_text_from_pdf(filepath)
             if text.startswith("Error"):
                 flash(text, 'error')
-                return redirect(url_for('index'))
+                return redirect(url_for('upload_file'))
+            
+            # Summarize text
             summary = summarize_legal_text(text)
             if summary.startswith("Error"):
                 flash(summary, 'error')
-                return redirect(url_for('index'))
+                return redirect(url_for('upload_file'))
+            
+            # Extract entities
             tags = extract_legal_entities(text)
+            
+            # Update upload count for free users
             if current_user.subscription_status != 'active':
                 current_user.upload_count += 1
                 db.session.commit()
+            
             return render_template(
                 'result.html',
                 summary=summary,
                 tags=tags,
                 original_filename=filename,
-                text_preview=text[:500] + "..." if len(text) > 500 else text
+                text_preview=text[:500] + "..." if len(text) > 500 else text,
+                is_premium=current_user.subscription_status == 'active'
             )
         except Exception as e:
             flash(f"Processing error: {str(e)}", 'error')
             logger.error(f"Processing error: {str(e)}", exc_info=True)
-            return redirect(url_for('index'))
+            return redirect(url_for('upload_file'))
         finally:
             try:
                 if os.path.exists(filepath):
@@ -508,9 +642,31 @@ def upload_file():
                 logger.error(f"Error removing temporary file: {str(e)}", exc_info=True)
     except Exception as e:
         logger.error(f"Unexpected error in upload_file: {str(e)}", exc_info=True)
-        return "Internal Server Error", 500
+        return render_template('error.html', message="Upload Error"), 500
+
+@app.route('/account')
+@login_required
+def account():
+    try:
+        return render_template('account.html', 
+                            user=current_user,
+                            is_premium=current_user.subscription_status == 'active')
+    except Exception as e:
+        logger.error(f"Error in account route: {str(e)}", exc_info=True)
+        return render_template('error.html', message="Account Error"), 500
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return render_template('error.html', message="Page not found"), 404
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return render_template('error.html', message="Internal server error"), 500
 
 # For local development
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port, debug=True)
