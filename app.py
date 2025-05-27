@@ -12,7 +12,6 @@ from werkzeug.utils import secure_filename
 import logging
 import time
 import razorpay
-import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
 
@@ -36,7 +35,7 @@ UPLOAD_FOLDER = os.path.join(app.instance_path, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
-database_url = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
+database_url = os.environ.get('DATABASE_URL', 'sqlite:///instance/users.db')
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -174,7 +173,7 @@ def summarize_legal_text(text):
             max_chunks = 10
         else:
             max_length = 5000
-            chunk_size = 800
+            chunk_size = 200
             max_chunks = 5
         
         text = text[:max_length]
@@ -352,7 +351,7 @@ def logout():
         logger.error(f"Error in logout route: {str(e)}", exc_info=True)
         return render_template('error.html', message="Logout Error"), 500
 
-@app.route('/create-subscription', methods=['GET', 'POST'])
+@app.route('/create-subscription', methods=['GET'])
 @login_required
 def create_subscription():
     try:
@@ -508,7 +507,7 @@ def razorpay_webhook():
 def manage_subscription():
     try:
         if not current_user.subscription_id:
-            flash('No active subscription', ' Ascending('index.html')        flash('No active subscription', 'error')
+            flash('No active subscription', 'error')
             return redirect(url_for('index'))
         
         subscription = razorpay_client.subscription.fetch(current_user.subscription_id)
@@ -568,7 +567,6 @@ def upload_file():
             file.save(filepath)
             logger.info(f"File saved temporarily at: {filepath}")
             
-            # Check file size before processing
             file_size = os.path.getsize(filepath)
             if file_size > 20 * 1024 * 1024:  # 20MB
                 flash('File is too large to process (max 20MB)', 'error')

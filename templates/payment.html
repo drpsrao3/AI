@@ -1,56 +1,64 @@
-<!-- templates/payment.html -->
 <!DOCTYPE html>
 <html>
 <head>
     <title>Complete Subscription</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
+        .btn:hover { background: #0056b3; }
+    </style>
 </head>
 <body>
-    <h1>Complete Your Subscription</h1>
-    <button id="rzp-button1">Pay with Razorpay</button>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script>
-        var options = {
-            "key": "{{ key_id }}",
-            "subscription_id": "{{ subscription_id }}",
-            "name": "Legal Summarizer",
-            "description": "Monthly Subscription",
-            "handler": function (response) {
-                // On success, submit payment details to /payment-success
-                var form = document.createElement('form');
-                form.method = 'POST';
-                form.action = "{{ url_for('payment_success') }}";
-                
-                var fields = {
-                    'razorpay_payment_id': response.razorpay_payment_id,
-                    'razorpay_subscription_id': response.razorpay_subscription_id,
-                    'razorpay_signature': response.razorpay_signature
-                };
-                
-                for (var key in fields) {
-                    var input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = key;
-                    input.value = fields[key];
-                    form.appendChild(input);
+    <div class="container">
+        <h1>Complete Your Subscription</h1>
+        <button id="rzp-button1" class="btn">Pay with Razorpay</button>
+        <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+        <script>
+            var options = {
+                "key": "{{ key_id }}",
+                "subscription_id": "{{ subscription_id }}",
+                "name": "Legal Summarizer",
+                "description": "Monthly Subscription",
+                "handler": function (response) {
+                    var form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = "{{ url_for('payment_success') }}";
+                    var fields = {
+                        'razorpay_payment_id': response.razorpay_payment_id,
+                        'razorpay_subscription_id': response.razorpay_subscription_id,
+                        'razorpay_signature': response.razorpay_signature
+                    };
+                    for (var key in fields) {
+                        var input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = key;
+                        input.value = fields[key];
+                        form.appendChild(input);
+                    }
+                    document.body.appendChild(form);
+                    form.submit();
+                },
+                "modal": {
+                    "ondismiss": function() {
+                        window.location.href = "{{ url_for('payment_failure') }}";
+                    }
+                },
+                "prefill": {
+                    "name": "{{ username }}",
+                    "email": "{{ username }}@example.com",
+                    "contact": "9000000000"
+                },
+                "theme": {
+                    "color": "#3399cc"
                 }
-                
-                document.body.appendChild(form);
-                form.submit();
-            },
-            "prefill": {
-                "name": "{{ username }}",
-                "email": "{{ username }}@example.com",
-                "contact": "9000000000"
-            },
-            "theme": {
-                "color": "#3399cc"
-            }
-        };
-        var rzp1 = new Razorpay(options);
-        document.getElementById('rzp-button1').onclick = function(e) {
-            rzp1.open();
-            e.preventDefault();
-        };
-    </script>
+            };
+            var rzp1 = new Razorpay(options);
+            document.getElementById('rzp-button1').onclick = function(e) {
+                rzp1.open();
+                e.preventDefault();
+            };
+        </script>
+    </div>
 </body>
 </html>

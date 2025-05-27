@@ -1,83 +1,42 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Analysis Results – {{ original_filename }}</title>
+    <title>Processing Result</title>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f7f9;
-            color: #333;
-            padding: 20px;
-            line-height: 1.6;
-        }
-
-        .container {
-            max-width: 800px;
-            margin: auto;
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-
-        h1 {
-            color: #2c3e50;
-        }
-
-        h2 {
-            margin-top: 30px;
-            color: #34495e;
-        }
-
-        h3 {
-            margin-top: 15px;
-            color: #5d6d7e;
-        }
-
-        ul {
-            padding-left: 20px;
-        }
-
-        a.button {
-            display: inline-block;
-            margin-top: 30px;
-            padding: 10px 20px;
-            background-color: #3498db;
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-        }
-
-        a.button:hover {
-            background-color: #2980b9;
-        }
-
-        .tag-list {
-            margin-top: 10px;
-        }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
+        .btn:hover { background: #0056b3; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Analysis Results for: <em>{{ original_filename }}</em></h1>
-        
-        <h2>Summary</h2>
+        <h1>Processing Result</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
+                {% endfor %}
+            {% endwith %}
+        <h2>File: {{ original_filename }}</h2>
+        <h3>Summary</h3>
         <p>{{ summary }}</p>
-        
-        <h2>Key Entities</h2>
-        {% for category, entities in tags.items() %}
-            {% if entities %}
-                <h3>{{ category }}</h3>
-                <ul class="tag-list">
-                    {% for entity in entities %}
-                        <li>{{ entity }}</li>
-                    {% endfor %}
-                </ul>
-            {% endif %}
+        <h3>Legal Entities</h3>
+        {% for key, values in tags.items() %}
+            <h4>{{ key }}</h4>
+            <ul>
+                {% for value in values %}
+                    <li>{{ value }}</li>
+                {% endfor %}
+            </ul>
         {% endfor %}
-        
-        <a href="/" class="button">Analyze Another PDF</a>
+        <h3>Text Preview</h3>
+        <p>{{ text_preview }}</p>
+        {% if not is_premium %}
+            <p>Upgrade to Premium for full text processing and unlimited uploads.</p>
+            <a href="{{ url_for('create_subscription') }}" class="btn">Subscribe</a>
+        {% endif %}
+        <p><a href="{{ url_for('upload_file') }}">Upload Another</a> | <a href="{{ url_for('index') }}">Back to Home</a></p>
     </div>
 </body>
 </html>

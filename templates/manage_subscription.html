@@ -4,13 +4,33 @@
     <title>Manage Subscription</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-        .btn { padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+        .container { max-width: 800px; margin: auto; }
+        .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
+        .btn:hover { background: #0056b3; }
+        .cancel-btn { background: #dc3545; }
+        .cancel-btn:hover { background: #c82333; }
     </style>
 </head>
 <body>
-    <h1>Manage Subscription</h1>
-    <p>Status: {{ subscription.status | default('Unknown') }}</p>
-    <p>Plan: {{ subscription.plan_id | default('None') }}</p>
-    <a href="{{ url_for('index') }}" class="btn">Back</a>
+    <div class="container">
+        <h1>Manage Subscription</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <h2>Subscription Details</h2>
+        <p><strong>Status:</strong> {{ subscription.status | capitalize }}</p>
+        <p><strong>Plan ID:</strong> {{ subscription.plan_id }}</p>
+        <p><strong>Subscription ID:</strong> {{ subscription.id }}</p>
+        {% if subscription.status == 'active' %}
+            <form method="POST" action="{{ url_for('cancel_subscription') }}">
+                <button type="submit" class="btn cancel-btn">Cancel Subscription</button>
+            </form>
+        {% endif %}
+        <p><a href="{{ url_for('index') }}">Back to Home</a></p>
+    </div>
 </body>
 </html>

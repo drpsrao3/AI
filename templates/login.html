@@ -4,8 +4,9 @@
     <title>Login</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-        .container { max-width: 400px; margin: auto; }
+        .container { max-width: 800px; margin: auto; }
         .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
+        .btn:hover { background: #0056b3; }
     </style>
 </head>
 <body>
@@ -18,9 +19,11 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        <form method="POST">
-            <input type="text" name="username" placeholder="Username" required><br><br>
-            <input type="password" name="password" placeholder="Password" required><br><br>
+        <form method="POST" action="{{ url_for('login') }}">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" required><br>
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required><br>
             <button type="submit" class="btn">Login</button>
         </form>
         <p>Don't have an account? <a href="{{ url_for('register') }}">Register</a></p>
