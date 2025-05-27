@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__, template_folder='templates')
-app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
+# Use a fixed SECRET_KEY from environment variable
+app.secret_key = os.getenv('SECRET_KEY')
+if not app.secret_key:
+    raise ValueError("No SECRET_KEY set for Flask application. Set the SECRET_KEY environment variable.")
 
 # Configuration
 ALLOWED_EXTENSIONS = {'pdf'}
@@ -262,6 +265,15 @@ def extract_legal_entities(text):
         logger.error(error_msg, exc_info=True)
         return {"Error": error_msg}
 
+# Initialize database tables at startup
+with app.app_context():
+    try:
+        db.create_all()
+        logger.info("Database tables created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create database tables: {str(e)}")
+        raise
+
 @app.route('/', methods=['GET'])
 def index():
     try:
@@ -298,6 +310,7 @@ def login():
         return render_template('login.html')
     except Exception as e:
         logger.error(f"Error in login route: {str(e)}", exc_info=True)
+        print(f"Login Error: {str(e)}")  # Debugging output
         return render_template('error.html', message="Login Error"), 500
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -338,6 +351,7 @@ def register():
     except Exception as e:
         db.session.rollback()
         logger.error(f"Registration error: {str(e)}", exc_info=True)
+        print(f"Registration Error: {str(e)}")  # Debugging output
         return render_template('error.html', message="Registration Error"), 500
 
 @app.route('/logout')
@@ -637,8 +651,5 @@ def internal_server_error(e):
     return render_template('error.html', message="Internal server error"), 500
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-    
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port, debug=True)
