@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Account</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
+        .btn:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Account Details</h1>
+        <p><strong>Username:</strong> {{ user.username }}</p>
+        <p><strong>Subscription Status:</strong> {{ 'Premium' if is_premium else 'Free' }}</p>
+        {% if not is_premium %}
+            <p><strong>Uploads Remaining:</strong> {{ 5 - user.upload_count }}</p>
+        {% endif %}
+        <p><a href="{{ url_for('index') }}">Back to Home</a></p>
+    </div>
+</body>
+</html>

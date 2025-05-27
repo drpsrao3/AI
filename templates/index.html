@@ -41,7 +41,7 @@
                 <h3>Free Plan</h3>
                 <p>Basic summaries (5 chunks), limited entity extraction (50k chars), 5 uploads/month.</p>
                 <p><strong>Free</strong></p>
-                {% if current_user.is_authenticated and current_user.subscription_status != 'active' %}
+                {% if current_user.is_authenticated and current_user.subscription_status != 'active' and current_user.upload_count >= 5 %}
                     <form action="{{ url_for('create_subscription') }}" method="GET">
                         <button type="submit" class="btn">Upgrade to Premium</button>
                     </form>
