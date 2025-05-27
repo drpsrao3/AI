@@ -27,10 +27,13 @@ app = Flask(__name__, template_folder='templates')
 app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
 
 # Configuration
-UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
+app.instance_path = os.path.join(os.path.dirname(__file__), 'instance')
+os.makedirs(app.instance_path, exist_ok=True)
+UPLOAD_FOLDER = os.path.join(app.instance_path, 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 database_url = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
@@ -38,8 +41,6 @@ if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.instance_path = os.path.join(os.path.dirname(__file__), 'instance')
-os.makedirs(app.instance_path, exist_ok=True)
 
 # Initialize SQLAlchemy, Migrate, and Bcrypt
 db = SQLAlchemy(app)
@@ -51,16 +52,13 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Ensure upload directory exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 # Razorpay configuration
 try:
     razorpay_client = razorpay.Client(auth=(os.getenv('RAZORPAY_KEY_ID'), os.getenv('RAZORPAY_KEY_SECRET')))
     logger.debug("Razorpay client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Razorpay client: {str(e)}")
-    razorpay_client = None  # Set to None to handle cases where Razorpay isn't configured
+    razorpay_client = None
 
 # Global model instances (load on-demand to save memory)
 summarizer = None
@@ -92,12 +90,11 @@ def load_summarizer():
     if summarizer is None:
         logger.info("Loading summarization model...")
         try:
-            # Using a smaller, faster model for summarization
             summarizer = pipeline(
                 "summarization",
                 model="sshleifer/distilbart-cnn-12-6",
                 framework="pt",
-                device=-1  # Use CPU (-1) to avoid GPU memory issues
+                device=-1
             )
             logger.info("Summarization model loaded successfully")
         except Exception as e:
@@ -122,7 +119,6 @@ def extract_text_from_pdf(pdf_path):
         logger.info(f"Extracting text from PDF: {pdf_path}")
         start_time = time.time()
         
-        # Try pdfplumber first
         text = ""
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
@@ -130,7 +126,6 @@ def extract_text_from_pdf(pdf_path):
                 if page_text:
                     text += page_text + "\n"
         
-        # Fallback to PyPDF2 if pdfplumber fails
         if not text.strip():
             logger.warning("pdfplumber extracted no text, falling back to PyPDF2")
             with open(pdf_path, 'rb') as file:
@@ -152,10 +147,7 @@ def extract_text_from_pdf(pdf_path):
 
 def preprocess_text(text):
     try:
-        # Basic cleaning
         text = ' '.join(text.split())
-        
-        # Remove common legal document noise
         noise_phrases = [
             "IN THE COURT OF", "CASE NO.", "JUDGMENT", 
             "BEFORE THE HON'BLE", "IN THE MATTER OF",
@@ -163,7 +155,6 @@ def preprocess_text(text):
         ]
         for phrase in noise_phrases:
             text = text.replace(phrase, "")
-        
         return text.strip()
     except Exception as e:
         logger.error(f"Error in preprocessing: {str(e)}", exc_info=True)
@@ -174,28 +165,21 @@ def summarize_legal_text(text):
         logger.info("Starting text summarization...")
         start_time = time.time()
         
-        # Get the summarizer instance
         summarizer = load_summarizer()
-        
-        # Preprocess and limit text size
         text = preprocess_text(text)
         
-        # Set limits based on subscription status
         if current_user.subscription_status == 'active':
-            max_length = 10000  # 10k chars for premium
+            max_length = 10000
             chunk_size = 1000
             max_chunks = 10
         else:
-            max_length = 5000   # 5k chars for free
+            max_length = 5000
             chunk_size = 800
             max_chunks = 5
         
-        # Truncate text to max length
         text = text[:max_length]
-        
-        # Split into chunks
         chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-        chunks = chunks[:max_chunks]  # Limit number of chunks
+        chunks = chunks[:max_chunks]
         
         summaries = []
         for i, chunk in enumerate(chunks):
@@ -231,7 +215,6 @@ def extract_legal_entities(text):
         
         nlp = load_nlp()
         
-        # Set text limits based on subscription
         char_limit = 25000 if current_user.subscription_status == 'active' else 10000
         text = text[:char_limit]
         
@@ -247,7 +230,6 @@ def extract_legal_entities(text):
             "Citations": set()
         }
         
-        # Extract entities
         for ent in doc.ents:
             if ent.label_ == "PERSON":
                 if "J." in ent.text or "Justice" in ent.text:
@@ -265,7 +247,6 @@ def extract_legal_entities(text):
                 if any(word in ent.text.lower() for word in ["no.", "number"]):
                     legal_tags["Case Numbers"].add(ent.text)
         
-        # Additional pattern matching
         for sent in doc.sents:
             if " v. " in sent.text:
                 parts = [p.strip() for p in sent.text.split(" v. ")]
@@ -274,7 +255,6 @@ def extract_legal_entities(text):
             if any(c in sent.text for c in [" U.S. ", " F. ", " S.Ct. ", " A.C. "]):
                 legal_tags["Citations"].add(sent.text.strip())
         
-        # Convert sets to sorted lists
         result = {k: sorted(v) for k, v in legal_tags.items() if v}
         logger.info(f"Entity extraction completed in {time.time() - start_time:.2f}s")
         return result
@@ -380,13 +360,12 @@ def create_subscription():
             flash('Payment system is currently unavailable', 'error')
             return redirect(url_for('index'))
         
-        # Create or retrieve customer
         if not current_user.razorpay_customer_id:
             try:
                 customer = razorpay_client.customer.create({
                     'name': current_user.username,
                     'email': f'{current_user.username}@example.com',
-                    'contact': '9000000000'  # Default contact number
+                    'contact': '9000000000'
                 })
                 current_user.razorpay_customer_id = customer['id']
                 db.session.commit()
@@ -395,10 +374,9 @@ def create_subscription():
                 flash('Error creating customer record', 'error')
                 return redirect(url_for('index'))
         
-        # Create subscription
         try:
             subscription = razorpay_client.subscription.create({
-                'plan_id': os.getenv('RAZORPAY_PLAN_ID', 'plan_MjA0NzUwV9JqQp'),  # Default test plan
+                'plan_id': os.getenv('RAZORPAY_PLAN_ID', 'plan_MjA0NzUwV9JqQp'),
                 'customer_notify': 1,
                 'total_count': 12,
                 'quantity': 1,
@@ -432,7 +410,6 @@ def payment_success():
             flash('Invalid payment response', 'error')
             return redirect(url_for('index'))
         
-        # Verify the payment signature
         params = {
             'razorpay_subscription_id': subscription_id,
             'razorpay_payment_id': razorpay_payment_id,
@@ -441,8 +418,6 @@ def payment_success():
         
         try:
             razorpay_client.utility.verify_payment_signature(params)
-            
-            # Fetch subscription details
             subscription = razorpay_client.subscription.fetch(subscription_id)
             
             if subscription['status'] == 'active':
@@ -482,7 +457,6 @@ def razorpay_webhook():
         payload = request.get_json()
         logger.debug(f"Webhook payload: {payload}")
         
-        # Verify webhook signature
         webhook_secret = os.getenv('RAZORPAY_WEBHOOK_SECRET')
         received_signature = request.headers.get('X-Razorpay-Signature')
         
@@ -534,7 +508,7 @@ def razorpay_webhook():
 def manage_subscription():
     try:
         if not current_user.subscription_id:
-            flash('No active subscription', 'error')
+            flash('No active subscription', ' Ascending('index.html')        flash('No active subscription', 'error')
             return redirect(url_for('index'))
         
         subscription = razorpay_client.subscription.fetch(current_user.subscription_id)
@@ -568,7 +542,6 @@ def upload_file():
         if request.method == 'GET':
             return render_template('upload.html')
         
-        # Check subscription limits
         if current_user.subscription_status != 'active' and current_user.upload_count >= 5:
             flash('Free plan limit reached. Subscribe to Premium for unlimited uploads.', 'error')
             return redirect(url_for('index'))
@@ -587,7 +560,6 @@ def upload_file():
             flash('Only PDF files are allowed', 'error')
             return redirect(url_for('upload_file'))
         
-        # Secure filename and create unique path
         filename = secure_filename(file.filename)
         unique_id = str(int(time.time()))
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{filename}")
@@ -595,28 +567,31 @@ def upload_file():
         try:
             file.save(filepath)
             logger.info(f"File saved temporarily at: {filepath}")
+            
+            # Check file size before processing
+            file_size = os.path.getsize(filepath)
+            if file_size > 20 * 1024 * 1024:  # 20MB
+                flash('File is too large to process (max 20MB)', 'error')
+                os.remove(filepath)
+                return redirect(url_for('upload_file'))
         except Exception as e:
             flash('Failed to save file', 'error')
             logger.error(f"File save error: {str(e)}", exc_info=True)
             return redirect(url_for('upload_file'))
         
         try:
-            # Extract text
             text = extract_text_from_pdf(filepath)
             if text.startswith("Error"):
                 flash(text, 'error')
                 return redirect(url_for('upload_file'))
             
-            # Summarize text
             summary = summarize_legal_text(text)
             if summary.startswith("Error"):
                 flash(summary, 'error')
                 return redirect(url_for('upload_file'))
             
-            # Extract entities
             tags = extract_legal_entities(text)
             
-            # Update upload count for free users
             if current_user.subscription_status != 'active':
                 current_user.upload_count += 1
                 db.session.commit()
@@ -663,7 +638,6 @@ def page_not_found(e):
 def internal_server_error(e):
     return render_template('error.html', message="Internal server error"), 500
 
-# For local development
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

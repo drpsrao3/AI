@@ -1,43 +1,56 @@
+<!-- templates/payment.html -->
 <!DOCTYPE html>
 <html>
 <head>
     <title>Complete Subscription</title>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
     <h1>Complete Your Subscription</h1>
-    <p>Click below to proceed with payment.</p>
-    <button id="rzp-button" class="btn">Pay Now</button>
-
+    <button id="rzp-button1">Pay with Razorpay</button>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script>
         var options = {
             "key": "{{ key_id }}",
             "subscription_id": "{{ subscription_id }}",
             "name": "Legal Summarizer",
-            "description": "Premium Subscription",
+            "description": "Monthly Subscription",
             "handler": function (response) {
-                var form = document.createElement("form");
-                form.method = "POST";
+                // On success, submit payment details to /payment-success
+                var form = document.createElement('form');
+                form.method = 'POST';
                 form.action = "{{ url_for('payment_success') }}";
-                var input = document.createElement("input");
-                input.type = "hidden";
-                input.name = "razorpay_subscription_id";
-                input.value = response.razorpay_subscription_id;
-                form.appendChild(input);
+                
+                var fields = {
+                    'razorpay_payment_id': response.razorpay_payment_id,
+                    'razorpay_subscription_id': response.razorpay_subscription_id,
+                    'razorpay_signature': response.razorpay_signature
+                };
+                
+                for (var key in fields) {
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = key;
+                    input.value = fields[key];
+                    form.appendChild(input);
+                }
+                
                 document.body.appendChild(form);
                 form.submit();
+            },
+            "prefill": {
+                "name": "{{ username }}",
+                "email": "{{ username }}@example.com",
+                "contact": "9000000000"
+            },
+            "theme": {
+                "color": "#3399cc"
             }
         };
-        var rzp = new Razorpay(options);
-        document.getElementById('rzp-button').onclick = function(e){
-            rzp.open();
+        var rzp1 = new Razorpay(options);
+        document.getElementById('rzp-button1').onclick = function(e) {
+            rzp1.open();
             e.preventDefault();
-        }
+        };
     </script>
 </body>
-<style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-    .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
-    .btn:hover { background: #0056b3; }
-</style>
 </html>

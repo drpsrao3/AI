@@ -26,7 +26,6 @@
 
         {% if current_user.is_authenticated %}
             <p>Welcome, {{ current_user.username }}! 
-                <a href="{{ url_for('upload_file') }}">Upload PDF</a> | 
                 <a href="{{ url_for('manage_subscription') }}">Manage Subscription</a> | 
                 <a href="{{ url_for('logout') }}">Logout</a></p>
             {% if current_user.subscription_status != 'active' %}
@@ -43,7 +42,7 @@
                 <p>Basic summaries (5 chunks), limited entity extraction (50k chars), 5 uploads/month.</p>
                 <p><strong>Free</strong></p>
                 {% if current_user.is_authenticated and current_user.subscription_status != 'active' %}
-                    <form action="{{ url_for('create_subscription') }}" method="POST">
+                    <form action="{{ url_for('create_subscription') }}" method="GET">
                         <button type="submit" class="btn">Upgrade to Premium</button>
                     </form>
                 {% endif %}
@@ -53,7 +52,7 @@
                 <p>Full summaries (10 chunks), extended entity extraction (100k chars), unlimited uploads.</p>
                 <p><strong>₹799/month</strong></p>
                 {% if current_user.is_authenticated and current_user.subscription_status != 'active' %}
-                    <form action="{{ url_for('create_subscription') }}" method="POST">
+                    <form action="{{ url_for('create_subscription') }}" method="GET">
                         <button type="submit" class="btn">Subscribe</button>
                     </form>
                 {% elif current_user.is_authenticated and current_user.subscription_status == 'active' %}
@@ -66,7 +65,7 @@
         {% if current_user.is_authenticated %}
             <form method="POST" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
                 <input type="file" name="file" accept=".pdf" required>
-                <button type="submit" class="btn">Summarize</button>
+                <button type="submit" class="btn">Upload PDF</button>
             </form>
         {% else %}
             <p>Please <a href="{{ url_for('login') }}">log in</a> to upload documents.</p>
