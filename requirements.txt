@@ -1,1 +1,15 @@
--e "flask\nflask-login\nflask-sqlalchemy\nflask-migrate\nflask-bcrypt\nspacy\npdfplumber\nPyPDF2\ntransformers\ntorch\nwerkzeug\nrazorpay\ntenacity\npython-dotenv\ngunicorn" 
+flask
+flask-login
+flask-sqlalchemy
+flask-migrate
+flask-bcrypt
+spacy
+pdfplumber
+PyPDF2
+transformers
+torch
+werkzeug
+razorpay
+tenacity
+python-dotenv
+gunicorn
