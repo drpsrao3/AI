@@ -12,12 +12,9 @@
 <body>
     <div class="container">
         <h1>Processing Result</h1>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
-                {% endfor %}
-            {% endwith %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
+        {% endfor %}
         <h2>File: {{ original_filename }}</h2>
         <h3>Summary</h3>
         <p>{{ summary }}</p>

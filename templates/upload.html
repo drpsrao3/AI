@@ -12,13 +12,9 @@
 <body>
     <div class="container">
         <h1>Upload a PDF</h1>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
+        {% endfor %}
         <form method="POST" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
             <input type="file" name="file" accept=".pdf" required>
             <button type="submit" class="btn">Upload PDF</button>

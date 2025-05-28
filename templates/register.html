@@ -12,23 +12,19 @@
 <body>
     <div class="container">
         <h1>Register</h1>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
+        {% endfor %}
         <form method="POST" action="{{ url_for('register') }}">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" required><br>
+            <label for="username">Email:</label>
+            <input type="email" id="username" name="username" required><br><br>
             <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required minlength="8"><br>
+            <input type="password" id="password" name="password" maxlength="80" required><br><br>
             <label for="confirm_password">Confirm Password:</label>
-            <input type="password" id="confirm_password" name="confirm_password" required minlength="8"><br>
+            <input type="password" id="confirm_password" name="confirm_password" maxlength="80" required><br><br>
             <button type="submit" class="btn">Register</button>
         </form>
-        <p>Already have an account? <a href="{{ url_for('login') }}">Login</a></p>
+        <p><br>Already have an account? <a href="{{ url_for('login') }}">Login</a></p>
     </div>
 </body>
 </html>

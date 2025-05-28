@@ -16,13 +16,9 @@
     <div class="container">
         <h1>Legal Document Summarizer</h1>
         <p>AI-powered summarization and entity extraction for legal documents.</p>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
+        {% endfor %}
 
         {% if current_user.is_authenticated %}
             <p>Welcome, {{ current_user.username }}! 

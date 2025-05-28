@@ -14,33 +14,58 @@ import time
 import razorpay
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 # Setup logging with more detail
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# Load environment variables from .env file (for local development)
 load_dotenv()
 
+# Initialize Flask app
 app = Flask(__name__, template_folder='templates')
-# Use a fixed SECRET_KEY from environment variable
+
+# Set SECRET_KEY from environment variable
 app.secret_key = os.getenv('SECRET_KEY')
 if not app.secret_key:
-    raise ValueError("No SECRET_KEY set for Flask application. Set the SECRET_KEY environment variable.")
+    raise ValueError("No SECRET_KEY set for Flask application. Set the SECRET_KEY environment variable in Render or .env file.")
 
 # Configuration
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
-app.instance_path = os.path.join(os.path.dirname(__file__), 'instance')
-os.makedirs(app.instance_path, exist_ok=True)
-UPLOAD_FOLDER = os.path.join(app.instance_path, 'uploads')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# Ensure instance directory exists
+app.instance_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'instance'))
+logger.debug(f"Instance path: {app.instance_path}")
+try:
+    os.makedirs(app.instance_path, exist_ok=True)
+    logger.debug(f"Created instance directory: {app.instance_path}")
+except Exception as e:
+    logger.error(f"Failed to create instance directory: {str(e)}")
+    raise
+
+UPLOAD_FOLDER = os.path.join(app.instance_path, 'Uploads')
+try:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    logger.debug(f"Created uploads directory: {UPLOAD_FOLDER}")
+except Exception as e:
+    logger.error(f"Failed to create uploads directory: {str(e)}")
+    raise
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
-database_url = os.environ.get('DATABASE_URL', 'sqlite:///instance/users.db')
+
+# Database configuration
+database_url = os.getenv('DATABASE_URL', 'sqlite:///instance/users.db')
+logger.debug(f"Using DATABASE_URL: {database_url}")
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
+elif database_url.startswith('sqlite:///') and os.name == 'nt':  # Windows-specific path handling
+    # Ensure SQLite path is absolute for Windows
+    if not database_url.startswith('sqlite:///D:'):
+        db_path = os.path.join(app.instance_path, 'users.db').replace('\\', '/')
+        database_url = f'sqlite:///{db_path}'
+        logger.debug(f"Adjusted SQLite DATABASE_URL for Windows: {database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -56,8 +81,14 @@ login_manager.login_view = 'login'
 
 # Razorpay configuration
 try:
-    razorpay_client = razorpay.Client(auth=(os.getenv('RAZORPAY_KEY_ID'), os.getenv('RAZORPAY_KEY_SECRET')))
-    logger.debug("Razorpay client initialized successfully")
+    razorpay_key_id = os.getenv('RAZORPAY_KEY_ID')
+    razorpay_key_secret = os.getenv('RAZORPAY_KEY_SECRET')
+    if not razorpay_key_id or not razorpay_key_secret:
+        logger.error("Razorpay credentials missing. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET environment variables.")
+        razorpay_client = None
+    else:
+        razorpay_client = razorpay.Client(auth=(razorpay_key_id, razorpay_key_secret))
+        logger.debug("Razorpay client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Razorpay client: {str(e)}")
     razorpay_client = None
@@ -75,11 +106,12 @@ class User(UserMixin, db.Model):
     subscription_status = db.Column(db.String(20), default='inactive')
     subscription_id = db.Column(db.String(100))
     upload_count = db.Column(db.Integer, default=0)
+    subscription_end_date = db.Column(db.DateTime)  # Added column
 
 @login_manager.user_loader
 def load_user(user_id):
     try:
-        return User.query.get(int(user_id))
+        return db.session.get(User, int(user_id))  # Updated to use db.session.get
     except Exception as e:
         logger.error(f"Error loading user {user_id}: {str(e)}")
         return None
@@ -269,7 +301,7 @@ def extract_legal_entities(text):
 with app.app_context():
     try:
         db.create_all()
-        logger.info("Database tables created successfully")
+        logger.info("Successfully created database tables")
     except Exception as e:
         logger.error(f"Failed to create database tables: {str(e)}")
         raise
@@ -295,7 +327,7 @@ def login():
                 return redirect(url_for('login'))
             
             logger.debug(f"Login attempt for username: {username}")
-            user = User.query.filter_by(username=username).first()
+            user = db.session.get(User, User.query.filter_by(username=username).first().id) if User.query.filter_by(username=username).first() else None
             
             if user and bcrypt.check_password_hash(user.password, password):
                 login_user(user)
@@ -310,7 +342,6 @@ def login():
         return render_template('login.html')
     except Exception as e:
         logger.error(f"Error in login route: {str(e)}", exc_info=True)
-        print(f"Login Error: {str(e)}")  # Debugging output
         return render_template('error.html', message="Login Error"), 500
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -351,7 +382,6 @@ def register():
     except Exception as e:
         db.session.rollback()
         logger.error(f"Registration error: {str(e)}", exc_info=True)
-        print(f"Registration Error: {str(e)}")  # Debugging output
         return render_template('error.html', message="Registration Error"), 500
 
 @app.route('/logout')
@@ -377,7 +407,7 @@ def create_subscription():
             try:
                 customer = razorpay_client.customer.create({
                     'name': current_user.username,
-                    'email': f'{current_user.username}@example.com',
+                    'email': current_user.username,
                     'contact': '9000000000'
                 })
                 current_user.razorpay_customer_id = customer['id']
@@ -436,6 +466,7 @@ def payment_success():
             if subscription['status'] == 'active':
                 current_user.subscription_id = subscription_id
                 current_user.subscription_status = 'active'
+                current_user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
                 db.session.commit()
                 flash('Subscription successful!', 'success')
             else:
@@ -494,6 +525,7 @@ def razorpay_webhook():
             if user:
                 user.subscription_id = subscription['id']
                 user.subscription_status = 'active'
+                user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
                 db.session.commit()
                 logger.info(f"Subscription activated for user {user.username}")
             else:
@@ -506,6 +538,7 @@ def razorpay_webhook():
             
             if user:
                 user.subscription_status = 'inactive'
+                user.subscription_end_date = None
                 db.session.commit()
                 logger.info(f"Subscription cancelled for user {user.username}")
             else:
@@ -540,6 +573,7 @@ def cancel_subscription():
         
         razorpay_client.subscription.cancel(current_user.subscription_id)
         current_user.subscription_status = 'inactive'
+        current_user.subscription_end_date = None
         db.session.commit()
         
         flash('Subscription cancelled successfully', 'success')
@@ -651,5 +685,5 @@ def internal_server_error(e):
     return render_template('error.html', message="Internal server error"), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    port = int(os.getenv('PORT', 8000))
+    app.run(host='0.0.0.0', port=port)
