@@ -56,16 +56,23 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 # Database configuration
-database_url = os.getenv('DATABASE_URL', 'sqlite:///instance/users.db')
-logger.debug(f"Using DATABASE_URL: {database_url}")
-if database_url.startswith('postgres://'):
-    database_url = database_url.replace('postgres://', 'postgresql://', 1)
-elif database_url.startswith('sqlite:///') and os.name == 'nt':  # Windows-specific path handling
-    # Ensure SQLite path is absolute for Windows
-    if not database_url.startswith('sqlite:///D:'):
-        db_path = os.path.join(app.instance_path, 'users.db').replace('\\', '/')
-        database_url = f'sqlite:///{db_path}'
-        logger.debug(f"Adjusted SQLite DATABASE_URL for Windows: {database_url}")
+database_url = os.getenv('DATABASE_URL')
+if database_url:
+    if database_url.startswith('postgres://'):
+        # Render uses 'postgres://' which SQLAlchemy doesn't accept
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+else:
+    # Local development fallback (cross-platform)
+    db_dir = os.path.join(app.instance_path, 'db')  # Use a dedicated db folder
+    try:
+        os.makedirs(db_dir, exist_ok=True)  # Ensure the db directory exists
+        logger.debug(f"Created database directory: {db_dir}")
+    except Exception as e:
+        logger.error(f"Failed to create database directory: {str(e)}")
+        raise
+    db_path = os.path.join(db_dir, 'users.db')
+    database_url = f"sqlite:///{db_path}"
+logger.debug(f"Configured database URL: {database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -106,12 +113,12 @@ class User(UserMixin, db.Model):
     subscription_status = db.Column(db.String(20), default='inactive')
     subscription_id = db.Column(db.String(100))
     upload_count = db.Column(db.Integer, default=0)
-    subscription_end_date = db.Column(db.DateTime)  # Added column
+    subscription_end_date = db.Column(db.DateTime)
 
 @login_manager.user_loader
 def load_user(user_id):
     try:
-        return db.session.get(User, int(user_id))  # Updated to use db.session.get
+        return db.session.get(User, int(user_id))
     except Exception as e:
         logger.error(f"Error loading user {user_id}: {str(e)}")
         return None
@@ -419,7 +426,7 @@ def create_subscription():
         
         try:
             subscription = razorpay_client.subscription.create({
-                'plan_id': os.getenv('RAZORPAY_PLAN_ID', 'plan_MjA0NzUwV9JqQp'),
+                'plan_id': os.getenv('RAZORPAY_PL也好
                 'customer_notify': 1,
                 'total_count': 12,
                 'quantity': 1,
