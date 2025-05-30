@@ -15,10 +15,12 @@ import razorpay
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+import requests  # Added for retry logic
 
 # Setup logging with more detail
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logging.getLogger('pdfplumber').setLevel(logging.ERROR)  # Suppress pdfplumber warnings
 
 # Load environment variables from .env file (for local development)
 load_dotenv()
@@ -63,14 +65,15 @@ if database_url:
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
 else:
     # Local development fallback (cross-platform)
-    db_dir = os.path.join(app.instance_path, 'db')  # Use a dedicated db folder
+    db_dir = os.path.join(app.instance_path, 'db')
     try:
-        os.makedirs(db_dir, exist_ok=True)  # Ensure the db directory exists
+        os.makedirs(db_dir, exist_ok=True)
         logger.debug(f"Created database directory: {db_dir}")
     except Exception as e:
         logger.error(f"Failed to create database directory: {str(e)}")
         raise
     db_path = os.path.join(db_dir, 'users.db')
+    logger.info(f"Database path: {db_path}")
     database_url = f"sqlite:///{db_path}"
 logger.debug(f"Configured database URL: {database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -90,6 +93,8 @@ login_manager.login_view = 'login'
 try:
     razorpay_key_id = os.getenv('RAZORPAY_KEY_ID')
     razorpay_key_secret = os.getenv('RAZORPAY_KEY_SECRET')
+    logger.debug(f"Razorpay Key ID: {razorpay_key_id}")
+    logger.debug(f"Razorpay Key Secret: {razorpay_key_secret[:4]}...")  # Partial secret for safety
     if not razorpay_key_id or not razorpay_key_secret:
         logger.error("Razorpay credentials missing. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET environment variables.")
         razorpay_client = None
@@ -133,7 +138,7 @@ def load_summarizer():
         try:
             summarizer = pipeline(
                 "summarization",
-                model="sshleifer/distilbart-cnn-12-6",
+                model="facebook/bart-large-cnn",
                 framework="pt",
                 device=-1
             )
@@ -227,8 +232,8 @@ def summarize_legal_text(text):
             try:
                 summary = summarizer(
                     chunk,
-                    max_length=150,
-                    min_length=50,
+                    max_length=50,  # Reduced from 150 to 50
+                    min_length=30,  # Adjusted from 50 to 30
                     do_sample=False,
                     truncation=True
                 )[0]['summary_text']
@@ -425,16 +430,26 @@ def create_subscription():
                 return redirect(url_for('index'))
         
         try:
-            subscription = razorpay_client.subscription.create({
-                'plan_id': os.getenv('RAZORPAY_PL也好
-                'customer_notify': 1,
-                'total_count': 12,
-                'quantity': 1,
-                'notes': {
-                    'user_id': current_user.id,
-                    'username': current_user.username
-                }
-            })
+            # Add retry logic for Razorpay subscription creation
+            @retry(
+                stop=stop_after_attempt(3),  # Retry 3 times
+                wait=wait_exponential(multiplier=1, min=2, max=10),  # Exponential backoff: 2s, 4s, 8s
+                retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout)),
+                before_sleep=lambda retry_state: logger.info(f"Retrying Razorpay subscription creation (attempt {retry_state.attempt_number})...")
+            )
+            def create_subscription_with_retry():
+                return razorpay_client.subscription.create({
+                    'plan_id': os.getenv('RAZORPAY_PLAN_ID'),
+                    'customer_notify': 1,
+                    'total_count': 12,
+                    'quantity': 1,
+                    'notes': {
+                        'user_id': current_user.id,
+                        'username': current_user.username
+                    }
+                })
+            
+            subscription = create_subscription_with_retry()
             
             return render_template('payment.html', 
                                  subscription_id=subscription['id'],
@@ -460,6 +475,7 @@ def payment_success():
             flash('Invalid payment response', 'error')
             return redirect(url_for('index'))
         
+        # Use razorpay_subscription_id for subscription payment verification
         params = {
             'razorpay_subscription_id': subscription_id,
             'razorpay_payment_id': razorpay_payment_id,
@@ -467,7 +483,8 @@ def payment_success():
         }
         
         try:
-            razorpay_client.utility.verify_payment_signature(params)
+            # Verify the subscription payment signature
+            razorpay_client.utility.verify_subscription_payment_signature(params)
             subscription = razorpay_client.subscription.fetch(subscription_id)
             
             if subscription['status'] == 'active':
@@ -487,14 +504,17 @@ def payment_success():
         logger.error(f"Error in payment-success route: {str(e)}", exc_info=True)
         return render_template('error.html', message="Payment Error"), 500
 
-@app.route('/payment-failure', methods=['POST'])
+@app.route('/payment-failure', methods=['GET', 'POST'])
 @login_required
 def payment_failure():
     try:
-        error_code = request.form.get('error_code')
-        error_description = request.form.get('error_description')
+        if request.method == 'POST':
+            error_code = request.form.get('error_code')
+            error_description = request.form.get('error_description')
+            logger.error(f"Payment failed: {error_code} - {error_description}")
+        else:
+            logger.error("Payment failure accessed via GET")
         
-        logger.error(f"Payment failed: {error_code} - {error_description}")
         flash('Payment failed. Please try again.', 'error')
         return redirect(url_for('index'))
     except Exception as e:
@@ -693,4 +713,4 @@ def internal_server_error(e):
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0', port=port)
