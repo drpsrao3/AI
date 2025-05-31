@@ -15,7 +15,9 @@ import razorpay
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-import requests  # Added for retry logic
+import requests
+import sqlalchemy.exc
+from sqlalchemy.sql import text  # For raw SQL queries
 
 # Setup logging with more detail
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,6 +33,7 @@ app = Flask(__name__, template_folder='templates')
 # Set SECRET_KEY from environment variable
 app.secret_key = os.getenv('SECRET_KEY')
 if not app.secret_key:
+    logger.error("No SECRET_KEY set. Please set the SECRET_KEY environment variable.")
     raise ValueError("No SECRET_KEY set for Flask application. Set the SECRET_KEY environment variable in Render or .env file.")
 
 # Configuration
@@ -57,11 +60,11 @@ except Exception as e:
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
-# Database configuration
+# Database configuration with error handling
 database_url = os.getenv('DATABASE_URL')
+logger.debug(f"Raw DATABASE_URL from environment: {database_url}")
 if database_url:
     if database_url.startswith('postgres://'):
-        # Render uses 'postgres://' which SQLAlchemy doesn't accept
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
 else:
     # Local development fallback (cross-platform)
@@ -84,22 +87,32 @@ db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 
+# Test database connection
+try:
+    with app.app_context():
+        db.session.execute(text('SELECT 1'))  # Use text() for raw SQL
+        logger.info("Database connection successful")
+except sqlalchemy.exc.OperationalError as e:
+    logger.error(f"Database connection failed: {str(e)}")
+    raise RuntimeError("Failed to connect to the database. Check DATABASE_URL and database availability.")
+
 # Initialize LoginManager
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Razorpay configuration
+# Razorpay configuration with debug logging
 try:
     razorpay_key_id = os.getenv('RAZORPAY_KEY_ID')
     razorpay_key_secret = os.getenv('RAZORPAY_KEY_SECRET')
     logger.debug(f"Razorpay Key ID: {razorpay_key_id}")
-    logger.debug(f"Razorpay Key Secret: {razorpay_key_secret[:4]}...")  # Partial secret for safety
+    logger.debug(f"Razorpay Key Secret: {razorpay_key_secret[:4] if razorpay_key_secret else None}...")
     if not razorpay_key_id or not razorpay_key_secret:
         logger.error("Razorpay credentials missing. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET environment variables.")
         razorpay_client = None
     else:
         razorpay_client = razorpay.Client(auth=(razorpay_key_id, razorpay_key_secret))
+        razorpay_client.set_app_details({"title": "CaseSummarizer", "version": "1.0"})
         logger.debug("Razorpay client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Razorpay client: {str(e)}")
@@ -232,8 +245,8 @@ def summarize_legal_text(text):
             try:
                 summary = summarizer(
                     chunk,
-                    max_length=50,  # Reduced from 150 to 50
-                    min_length=30,  # Adjusted from 50 to 30
+                    max_length=50,
+                    min_length=30,
                     do_sample=False,
                     truncation=True
                 )[0]['summary_text']
