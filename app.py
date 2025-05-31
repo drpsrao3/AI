@@ -325,7 +325,7 @@ def extract_legal_entities(text):
 # Initialize database tables at startup
 with app.app_context():
     try:
-        db.create_all()
+        #db.create_all()
         logger.info("Successfully created database tables")
     except Exception as e:
         logger.error(f"Failed to create database tables: {str(e)}")
