@@ -69,8 +69,8 @@ tenacity==9.0.0
 thinc==8.2.5
 tokenizers==0.20.3
 tomli==2.2.1
-torch==2.6.0+cpu
-torchvision==0.21.0+cpu
+torch==2.6.0
+torchvision==0.21.0
 tqdm==4.67.1
 transformers==4.45.2
 typer==0.16.0

@@ -1,27 +1,28 @@
 services:
   - type: web
-    name: case-summarizer
+    name: caseprep-ai
     env: python
-    repo: https://github.com/drpsrao3/AI.git
-    preBuildCommand: pip install --upgrade pip
-    buildCommand: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu && python -m spacy download en_core_web_sm
-    startCommand: bash start.sh
+    plan: free # or starter/professional depending on needs
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
     envVars:
-      - key: SECRET_KEY
-        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.10.12
       - key: DATABASE_URL
         fromDatabase:
-          name: cs-ai-db
+          name: caseprep-db
           property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
       - key: RAZORPAY_KEY_ID
         value: rzp_test_IUOc4j25Yk0fY4
       - key: RAZORPAY_KEY_SECRET
         value: Usk7AxjpN2bjhOUzESGRJ5lv
-      - key: RAZORPAY_WEBHOOK_SECRET
-        value: webhook_secret_12345
       - key: RAZORPAY_PLAN_ID
         value: plan_QYOJindZWhIN0V
-databases:
-  - name: cs-ai-db
-    databaseName: cs_ai
-    user: cs_ai_user
+      - key: RAZORPAY_WEBHOOK_SECRET
+        value: webhook_secret_12345
+  databases:
+    - name: caseprep-db
+      databaseName: drpsrao3_1
+      user: drpsrao3_1_user
