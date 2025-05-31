@@ -16,7 +16,7 @@ services:
       - key: RAZORPAY_KEY_ID
         value: rzp_test_IUOc4j25Yk0fY4
       - key: RAZORPAY_KEY_SECRET
-        value: your_newly_generated_key_secret
+        value: Usk7AxjpN2bjhOUzESGRJ5lv
       - key: RAZORPAY_WEBHOOK_SECRET
         value: webhook_secret_12345
       - key: RAZORPAY_PLAN_ID
