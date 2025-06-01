@@ -64,13 +64,16 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 # Database configuration with error handling
-# Database configuration with error handling
 database_url = os.getenv('DATABASE_URL')
 logger.debug(f"Raw DATABASE_URL from environment: {database_url}")
 if database_url:
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
 else:
+    # Raise an error on Render to prevent fallback to SQLite
+    if os.getenv('RENDER'):  # Render sets this environment variable
+        logger.error("DATABASE_URL environment variable is not set on Render. This is required.")
+        raise ValueError("DATABASE_URL environment variable is not set on Render. This is required.")
     # Local development fallback (cross-platform)
     db_dir = os.path.join(app.instance_path, 'db')
     try:
@@ -80,10 +83,11 @@ else:
         logger.error(f"Failed to create database directory: {str(e)}")
         raise
     db_path = os.path.join(db_dir, 'users.db')
-    logger.info(f"Database path: {db_path}")
+    logger.info(f"Local database path (SQLite): {db_path}")
     database_url = f"sqlite:///{db_path}"
 logger.debug(f"Configured database URL: {database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize SQLAlchemy, Migrate, and Bcrypt
 db = SQLAlchemy(app)
@@ -97,7 +101,7 @@ try:
         logger.info("Database connection successful")
 except sqlalchemy.exc.OperationalError as e:
     logger.error(f"Database connection failed: {str(e)}")
-    raise RuntimeError("Failed to connect to the database. Check DATABASE_URL and database availability.")
+    raise RuntimeError(f"Failed to connect to the database: {str(e)}. Check DATABASE_URL and database availability.")
 
 # Initialize LoginManager
 login_manager = LoginManager()
@@ -356,14 +360,6 @@ def extract_legal_entities(text):
         error_msg = f"Error extracting entities: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return {"Error": error_msg}
-
-# Initialize database tables at startup
-with app.app_context():
-    try:
-        logger.info("Successfully created database tables")
-    except Exception as e:
-        logger.error(f"Failed to create database tables: {str(e)}")
-        raise
 
 @app.route('/', methods=['GET'])
 def index():
