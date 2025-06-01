@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import requests
 import sqlalchemy.exc
 from sqlalchemy.sql import text  # For raw SQL queries
+import re
 
 # Setup logging with more detail
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -39,6 +40,8 @@ if not app.secret_key:
 # Configuration
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+FREE_WORD_LIMIT = 500  # Word limit for free trial
+FREE_UPLOAD_LIMIT = 5  # Max free uploads
 
 # Ensure instance directory exists
 app.instance_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'instance'))
@@ -149,9 +152,10 @@ def load_summarizer():
     if summarizer is None:
         logger.info("Loading summarization model...")
         try:
+            # Use google/pegasus-xsum (Apache 2.0 licensed, suitable for legal text summarization)
             summarizer = pipeline(
                 "summarization",
-                model="facebook/bart-large-cnn",
+                model="google/pegasus-xsum",
                 framework="pt",
                 device=-1
             )
@@ -204,13 +208,15 @@ def extract_text_from_pdf(pdf_path):
         logger.error(error_msg, exc_info=True)
         return error_msg
 
-def preprocess_text(text):
+def preprocess_legal_text(text):
     try:
+        # Clean up text and remove noise specific to legal documents
         text = ' '.join(text.split())
         noise_phrases = [
             "IN THE COURT OF", "CASE NO.", "JUDGMENT", 
             "BEFORE THE HON'BLE", "IN THE MATTER OF",
-            "BEFORE THE HONOURABLE", "REPORTABLE", "NON-REPORTABLE"
+            "BEFORE THE HONOURABLE", "REPORTABLE", "NON-REPORTABLE",
+            "WHEREAS", "PURSUANT TO", "ORDERED AND ADJUDGED"
         ]
         for phrase in noise_phrases:
             text = text.replace(phrase, "")
@@ -221,12 +227,19 @@ def preprocess_text(text):
 
 def summarize_legal_text(text):
     try:
-        logger.info("Starting text summarization...")
+        logger.info("Starting legal text summarization...")
         start_time = time.time()
         
         summarizer = load_summarizer()
-        text = preprocess_text(text)
+        text = preprocess_legal_text(text)
         
+        # Check word count for free trial
+        word_count = len(text.split())
+        if current_user.subscription_status != 'active':
+            if word_count > FREE_WORD_LIMIT:
+                return f"Error: Free trial limited to {FREE_WORD_LIMIT} words. Please subscribe for unlimited processing."
+
+        # Adjust chunking for legal text (focus on sections like holdings, arguments)
         if current_user.subscription_status == 'active':
             max_length = 10000
             chunk_size = 1000
@@ -237,12 +250,32 @@ def summarize_legal_text(text):
             max_chunks = 5
         
         text = text[:max_length]
-        chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-        chunks = chunks[:max_chunks]
+        # Split into meaningful legal sections (e.g., by paragraphs or headings)
+        sections = re.split(r'\n\s*\n', text)  # Split by double newlines (paragraphs)
+        chunks = []
+        current_chunk = ""
+        for section in sections:
+            section = section.strip()
+            if not section:
+                continue
+            if len(current_chunk) + len(section) <= chunk_size:
+                current_chunk += " " + section
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = section
+            if len(chunks) >= max_chunks:
+                break
+        if current_chunk and len(chunks) < max_chunks:
+            chunks.append(current_chunk.strip())
+        
+        if not chunks:
+            return "Error: No valid sections found for summarization"
         
         summaries = []
         for i, chunk in enumerate(chunks):
             try:
+                # Summarize with a focus on legal outcomes and arguments
                 summary = summarizer(
                     chunk,
                     max_length=50,
@@ -250,7 +283,9 @@ def summarize_legal_text(text):
                     do_sample=False,
                     truncation=True
                 )[0]['summary_text']
-                summaries.append(summary)
+                # Post-process to prioritize legal terms
+                summary = re.sub(r'\b(the|is|are)\b', '', summary)  # Remove filler words
+                summaries.append(summary.strip())
                 logger.debug(f"Processed chunk {i+1}/{len(chunks)}")
             except Exception as e:
                 logger.warning(f"Error summarizing chunk {i+1}: {str(e)}", exc_info=True)
@@ -325,7 +360,6 @@ def extract_legal_entities(text):
 # Initialize database tables at startup
 with app.app_context():
     try:
-        #db.create_all()
         logger.info("Successfully created database tables")
     except Exception as e:
         logger.error(f"Failed to create database tables: {str(e)}")
@@ -377,6 +411,8 @@ def register():
             password = request.form.get('password', '').strip()
             confirm_password = request.form.get('confirm_password', '').strip()
             
+            logger.debug(f"Received registration form data: {request.form}")
+            
             if not username or not password:
                 flash('Username and password are required', 'error')
                 return redirect(url_for('register'))
@@ -407,7 +443,7 @@ def register():
     except Exception as e:
         db.session.rollback()
         logger.error(f"Registration error: {str(e)}", exc_info=True)
-        return render_template('error.html', message="Registration Error"), 500
+        return render_template('error.html', message=f"Registration Error: {str(e)}"), 500
 
 @app.route('/logout')
 @login_required
@@ -432,7 +468,7 @@ def create_subscription():
             try:
                 customer = razorpay_client.customer.create({
                     'name': current_user.username,
-                    'email': current_user.username,
+                    'email': f"{current_user.username}@example.com",  # Placeholder email
                     'contact': '9000000000'
                 })
                 current_user.razorpay_customer_id = customer['id']
@@ -443,34 +479,25 @@ def create_subscription():
                 return redirect(url_for('index'))
         
         try:
-            # Add retry logic for Razorpay subscription creation
-            @retry(
-                stop=stop_after_attempt(3),  # Retry 3 times
-                wait=wait_exponential(multiplier=1, min=2, max=10),  # Exponential backoff: 2s, 4s, 8s
-                retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout)),
-                before_sleep=lambda retry_state: logger.info(f"Retrying Razorpay subscription creation (attempt {retry_state.attempt_number})...")
-            )
-            def create_subscription_with_retry():
-                return razorpay_client.subscription.create({
-                    'plan_id': os.getenv('RAZORPAY_PLAN_ID'),
-                    'customer_notify': 1,
-                    'total_count': 12,
-                    'quantity': 1,
-                    'notes': {
-                        'user_id': current_user.id,
-                        'username': current_user.username
-                    }
-                })
-            
-            subscription = create_subscription_with_retry()
+            # Create a one-month subscription order (not a recurring subscription)
+            amount = 9900  # ₹99 in paise
+            order = razorpay_client.order.create({
+                'amount': amount,
+                'currency': 'INR',
+                'payment_capture': 1,
+                'notes': {
+                    'user_id': current_user.id,
+                    'username': current_user.username
+                }
+            })
             
             return render_template('payment.html', 
-                                 subscription_id=subscription['id'],
+                                 order_id=order['id'],
                                  key_id=os.getenv('RAZORPAY_KEY_ID'),
                                  username=current_user.username)
         except Exception as e:
-            logger.error(f"Error creating subscription: {str(e)}", exc_info=True)
-            flash('Error creating subscription', 'error')
+            logger.error(f"Error creating order: {str(e)}", exc_info=True)
+            flash('Error creating subscription order', 'error')
             return redirect(url_for('index'))
     except Exception as e:
         logger.error(f"Unexpected error in create-subscription: {str(e)}", exc_info=True)
@@ -480,34 +507,32 @@ def create_subscription():
 @login_required
 def payment_success():
     try:
-        subscription_id = request.form.get('razorpay_subscription_id')
+        order_id = request.form.get('razorpay_order_id')
         razorpay_payment_id = request.form.get('razorpay_payment_id')
         razorpay_signature = request.form.get('razorpay_signature')
         
-        if not all([subscription_id, razorpay_payment_id, razorpay_signature]):
+        if not all([order_id, razorpay_payment_id, razorpay_signature]):
             flash('Invalid payment response', 'error')
             return redirect(url_for('index'))
         
-        # Use razorpay_subscription_id for subscription payment verification
         params = {
-            'razorpay_subscription_id': subscription_id,
+            'razorpay_order_id': order_id,
             'razorpay_payment_id': razorpay_payment_id,
             'razorpay_signature': razorpay_signature
         }
         
         try:
-            # Verify the subscription payment signature
-            razorpay_client.utility.verify_subscription_payment_signature(params)
-            subscription = razorpay_client.subscription.fetch(subscription_id)
+            # Verify the payment signature
+            razorpay_client.utility.verify_payment_signature(params)
+            payment = razorpay_client.payment.fetch(razorpay_payment_id)
             
-            if subscription['status'] == 'active':
-                current_user.subscription_id = subscription_id
+            if payment['status'] == 'captured':
                 current_user.subscription_status = 'active'
                 current_user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
                 db.session.commit()
-                flash('Subscription successful!', 'success')
+                flash('Subscription successful! Valid for 30 days.', 'success')
             else:
-                flash('Subscription not yet activated', 'warning')
+                flash('Payment not captured', 'warning')
         except Exception as e:
             logger.error(f"Payment verification failed: {str(e)}", exc_info=True)
             flash('Payment verification failed', 'error')
@@ -534,94 +559,6 @@ def payment_failure():
         logger.error(f"Error in payment-failure route: {str(e)}", exc_info=True)
         return render_template('error.html', message="Payment Error"), 500
 
-@app.route('/webhook', methods=['POST'])
-def razorpay_webhook():
-    try:
-        logger.info("Received webhook request")
-        payload = request.get_json()
-        logger.debug(f"Webhook payload: {payload}")
-        
-        webhook_secret = os.getenv('RAZORPAY_WEBHOOK_SECRET')
-        received_signature = request.headers.get('X-Razorpay-Signature')
-        
-        if webhook_secret:
-            try:
-                razorpay_client.utility.verify_webhook_signature(
-                    request.data.decode('utf-8'),
-                    received_signature,
-                    webhook_secret
-                )
-            except Exception as e:
-                logger.error(f"Webhook signature verification failed: {str(e)}")
-                return jsonify({'status': 'error', 'message': 'Invalid signature'}), 400
-        
-        event = payload.get('event')
-        
-        if event == 'subscription.activated':
-            subscription = payload['payload']['subscription']['entity']
-            customer_id = subscription['customer_id']
-            user = User.query.filter_by(razorpay_customer_id=customer_id).first()
-            
-            if user:
-                user.subscription_id = subscription['id']
-                user.subscription_status = 'active'
-                user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
-                db.session.commit()
-                logger.info(f"Subscription activated for user {user.username}")
-            else:
-                logger.warning(f"No user found with customer_id: {customer_id}")
-                
-        elif event == 'subscription.cancelled':
-            subscription = payload['payload']['subscription']['entity']
-            customer_id = subscription['customer_id']
-            user = User.query.filter_by(razorpay_customer_id=customer_id).first()
-            
-            if user:
-                user.subscription_status = 'inactive'
-                user.subscription_end_date = None
-                db.session.commit()
-                logger.info(f"Subscription cancelled for user {user.username}")
-            else:
-                logger.warning(f"No user found with customer_id: {customer_id}")
-                
-        return jsonify({'status': 'success'}), 200
-    except Exception as e:
-        logger.error(f"Webhook error: {str(e)}", exc_info=True)
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/manage-subscription')
-@login_required
-def manage_subscription():
-    try:
-        if not current_user.subscription_id:
-            flash('No active subscription', 'error')
-            return redirect(url_for('index'))
-        
-        subscription = razorpay_client.subscription.fetch(current_user.subscription_id)
-        return render_template('manage_subscription.html', subscription=subscription)
-    except Exception as e:
-        logger.error(f"Error in manage-subscription route: {str(e)}", exc_info=True)
-        return render_template('error.html', message="Subscription Error"), 500
-
-@app.route('/cancel-subscription', methods=['POST'])
-@login_required
-def cancel_subscription():
-    try:
-        if not current_user.subscription_id:
-            flash('No active subscription to cancel', 'error')
-            return redirect(url_for('index'))
-        
-        razorpay_client.subscription.cancel(current_user.subscription_id)
-        current_user.subscription_status = 'inactive'
-        current_user.subscription_end_date = None
-        db.session.commit()
-        
-        flash('Subscription cancelled successfully', 'success')
-        return redirect(url_for('index'))
-    except Exception as e:
-        logger.error(f"Error cancelling subscription: {str(e)}", exc_info=True)
-        return render_template('error.html', message="Cancellation Error"), 500
-
 @app.route('/upload', methods=['GET', 'POST'])
 @login_required
 def upload_file():
@@ -629,9 +566,16 @@ def upload_file():
         if request.method == 'GET':
             return render_template('upload.html')
         
-        if current_user.subscription_status != 'active' and current_user.upload_count >= 5:
-            flash('Free plan limit reached. Subscribe to Premium for unlimited uploads.', 'error')
-            return redirect(url_for('index'))
+        # Check subscription status
+        if current_user.subscription_status != 'active':
+            if current_user.upload_count >= FREE_UPLOAD_LIMIT:
+                flash('Free trial limit reached. Subscribe for unlimited uploads.', 'error')
+                return redirect(url_for('create_subscription'))
+            if current_user.subscription_end_date and current_user.subscription_end_date < datetime.utcnow():
+                current_user.subscription_status = 'inactive'
+                db.session.commit()
+                flash('Your subscription has expired. Please renew.', 'error')
+                return redirect(url_for('create_subscription'))
         
         if 'file' not in request.files:
             flash('No file part in the request', 'error')
