@@ -64,6 +64,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 # Database configuration with error handling
+# Database configuration with error handling
 database_url = os.getenv('DATABASE_URL')
 logger.debug(f"Raw DATABASE_URL from environment: {database_url}")
 if database_url:
@@ -83,7 +84,6 @@ else:
     database_url = f"sqlite:///{db_path}"
 logger.debug(f"Configured database URL: {database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize SQLAlchemy, Migrate, and Bcrypt
 db = SQLAlchemy(app)
