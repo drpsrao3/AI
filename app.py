@@ -440,23 +440,41 @@ def login():
             username = request.form.get('username', '').strip()
             password = request.form.get('password', '').strip()
             
+            logger.debug(f"Received login request with username: {username}")
+            
             if not username or not password:
+                logger.warning("Username or password missing in login request")
                 flash('Username and password are required', 'error')
                 return redirect(url_for('login'))
             
-            logger.debug(f"Login attempt for username: {username}")
-            user = db.session.get(User, User.query.filter_by(username=username).first().id) if User.query.filter_by(username=username).first() else None
+            logger.debug(f"Querying database for username: {username}")
+            user_query = User.query.filter_by(username=username).first()
+            if not user_query:
+                logger.warning(f"No user found with username: {username}")
+                flash('Invalid username or password', 'error')
+                return redirect(url_for('login'))
             
-            if user and bcrypt.check_password_hash(user.password, password):
+            logger.debug(f"Fetching user with ID: {user_query.id}")
+            user = db.session.get(User, user_query.id)
+            if not user:
+                logger.error(f"Failed to fetch user with ID: {user_query.id}")
+                flash('Invalid username or password', 'error')
+                return redirect(url_for('login'))
+            
+            logger.debug(f"Verifying password for user: {username}")
+            if bcrypt.check_password_hash(user.password, password):
+                logger.debug(f"Password verified, logging in user: {username}")
                 login_user(user)
                 logger.info(f"User {username} logged in successfully")
                 flash('Logged in successfully', 'success')
                 next_page = request.args.get('next')
                 return redirect(next_page or url_for('index'))
-            
-            flash('Invalid username or password', 'error')
-            return redirect(url_for('login'))
+            else:
+                logger.warning(f"Password verification failed for user: {username}")
+                flash('Invalid username or password', 'error')
+                return redirect(url_for('login'))
         
+        logger.debug("Rendering login page for GET request")
         return render_template('login.html')
     except Exception as e:
         logger.error(f"Error in login route: {str(e)}", exc_info=True)
