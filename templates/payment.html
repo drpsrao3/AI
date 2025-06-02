@@ -1,68 +1,87 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Complete Subscription</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: auto; }
-        .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
-        .btn:hover { background: #0056b3; }
-    </style>
+    <title>Payment - Legal Document Summarizer</title>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1>Complete Your Subscription</h1>
-        {% for category, message in get_flashed_messages(with_categories=true) %}
-            <p style="color: {{ 'green' if category == 'success' else 'red' }}">{{ message }}</p>
-        {% endfor %}
-        <button id="rzp-button1" class="btn">Pay with Razorpay</button>
-        <p><a href="{{ url_for('index') }}">Back to Home</a></p>
-        <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-        <script>
-            var options = {
-                "key": "{{ key_id }}",
-                "subscription_id": "{{ subscription_id }}",
-                "name": "Legal Summarizer",
-                "description": "Monthly Subscription",
-                "handler": function (response) {
-                    var form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = "{{ url_for('payment_success') }}";
-                    var fields = {
-                        'razorpay_payment_id': response.razorpay_payment_id,
-                        'razorpay_subscription_id': response.razorpay_subscription_id,
-                        'razorpay_signature': response.razorpay_signature
-                    };
-                    for (var key in fields) {
-                        var input = document.createElement('input');
-                        input.type = 'hidden';
-                        input.name = key;
-                        input.value = fields[key];
-                        form.appendChild(input);
-                    }
-                    document.body.appendChild(form);
-                    form.submit();
-                },
-                "modal": {
-                    "ondismiss": function() {
-                        window.location.href = "{{ url_for('payment_failure') }}";
-                    }
-                },
-                "prefill": {
-                    "name": "{{ username }}",
-                    "email": "{{ username }}@example.com",
-                    "contact": "9000000000"
-                },
-                "theme": {
-                    "color": "#3399cc"
-                }
-            };
-            var rzp1 = new Razorpay(options);
-            document.getElementById('rzp-button1').onclick = function(e) {
-                rzp1.open();
-                e.preventDefault();
-            };
-        </script>
-    </div>
+    <h1>Complete Your Subscription</h1>
+    <p>Username: {{ username }}</p>
+    <p>Amount: ₹99 (30 days)</p>
+    <button id="rzp-button1">Pay Now</button>
+
+    <script>
+        var options = {
+            "key": "{{ key_id }}", // Your Razorpay Key ID
+            "amount": "9900", // Amount in paise (₹99)
+            "currency": "INR",
+            "name": "Legal Document Summarizer",
+            "description": "30-Day Subscription",
+            "order_id": "{{ order_id }}", // Order ID from Razorpay
+            "handler": function (response) {
+                // On successful payment, submit the form with payment details
+                var form = document.createElement("form");
+                form.setAttribute("method", "POST");
+                form.setAttribute("action", "{{ url_for('payment_success') }}");
+
+                var orderId = document.createElement("input");
+                orderId.setAttribute("type", "hidden");
+                orderId.setAttribute("name", "razorpay_order_id");
+                orderId.setAttribute("value", response.razorpay_order_id);
+                form.appendChild(orderId);
+
+                var paymentId = document.createElement("input");
+                paymentId.setAttribute("type", "hidden");
+                paymentId.setAttribute("name", "razorpay_payment_id");
+                paymentId.setAttribute("value", response.razorpay_payment_id);
+                form.appendChild(paymentId);
+
+                var signature = document.createElement("input");
+                signature.setAttribute("type", "hidden");
+                signature.setAttribute("name", "razorpay_signature");
+                signature.setAttribute("value", response.razorpay_signature);
+                form.appendChild(signature);
+
+                document.body.appendChild(form);
+                form.submit();
+            },
+            "prefill": {
+                "name": "{{ username }}",
+                "email": "{{ username.split('@')[0] }}@example.com",
+                "contact": "9000000000"
+            },
+            "theme": {
+                "color": "#3399cc"
+            }
+        };
+
+        var rzp1 = new Razorpay(options);
+        document.getElementById('rzp-button1').onclick = function(e) {
+            rzp1.open();
+            e.preventDefault();
+        }
+
+        rzp1.on('payment.failed', function(response) {
+            // Redirect to payment-failure on failure
+            var form = document.createElement("form");
+            form.setAttribute("method", "POST");
+            form.setAttribute("action", "{{ url_for('payment_failure') }}");
+
+            var errorCode = document.createElement("input");
+            errorCode.setAttribute("type", "hidden");
+            errorCode.setAttribute("name", "error_code");
+            errorCode.setAttribute("value", response.error.code);
+            form.appendChild(errorCode);
+
+            var errorDescription = document.createElement("input");
+            errorDescription.setAttribute("type", "hidden");
+            errorDescription.setAttribute("name", "error_description");
+            errorDescription.setAttribute("value", response.error.description);
+            form.appendChild(errorDescription);
+
+            document.body.appendChild(form);
+            form.submit();
+        });
+    </script>
 </body>
 </html>

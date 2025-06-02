@@ -7,7 +7,7 @@ import os
 import spacy
 import pdfplumber
 import PyPDF2
-from transformers import pipeline
+from transformers import pipeline, BartTokenizer
 from werkzeug.utils import secure_filename
 import logging
 import time
@@ -24,6 +24,7 @@ import re
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logging.getLogger('pdfplumber').setLevel(logging.ERROR)  # Suppress pdfplumber warnings
+logging.getLogger('transformers').setLevel(logging.ERROR)  # Suppress transformers warnings
 
 # Load environment variables from .env file (for local development)
 load_dotenv()
@@ -40,7 +41,7 @@ if not app.secret_key:
 # Configuration
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
-FREE_WORD_LIMIT = 500  # Word limit for free trial
+FREE_WORD_LIMIT = 1500  # Word limit for free trial
 FREE_UPLOAD_LIMIT = 5  # Max free uploads
 
 # Ensure instance directory exists
@@ -127,6 +128,7 @@ except Exception as e:
 
 # Global model instances (load on-demand to save memory)
 summarizer = None
+tokenizer = None  # Add tokenizer for BART
 nlp = None
 
 # User model with subscription
@@ -156,10 +158,10 @@ def load_summarizer():
     if summarizer is None:
         logger.info("Loading summarization model...")
         try:
-            # Use google/pegasus-xsum (Apache 2.0 licensed, suitable for legal text summarization)
+            # Use sshleifer/distilbart-cnn-12-6 for better handling of legal texts
             summarizer = pipeline(
                 "summarization",
-                model="google/pegasus-xsum",
+                model="sshleifer/distilbart-cnn-12-6",
                 framework="pt",
                 device=-1
             )
@@ -168,6 +170,18 @@ def load_summarizer():
             logger.error(f"Failed to load summarizer: {str(e)}", exc_info=True)
             raise
     return summarizer
+
+def load_tokenizer():
+    global tokenizer
+    if tokenizer is None:
+        logger.info("Loading BART tokenizer...")
+        try:
+            tokenizer = BartTokenizer.from_pretrained("sshleifer/distilbart-cnn-12-6")
+            logger.info("BART tokenizer loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load tokenizer: {str(e)}", exc_info=True)
+            raise
+    return tokenizer
 
 def load_nlp():
     global nlp
@@ -214,16 +228,20 @@ def extract_text_from_pdf(pdf_path):
 
 def preprocess_legal_text(text):
     try:
-        # Clean up text and remove noise specific to legal documents
+        # Clean up text and remove noise specific to Indian legal documents
         text = ' '.join(text.split())
         noise_phrases = [
             "IN THE COURT OF", "CASE NO.", "JUDGMENT", 
             "BEFORE THE HON'BLE", "IN THE MATTER OF",
             "BEFORE THE HONOURABLE", "REPORTABLE", "NON-REPORTABLE",
-            "WHEREAS", "PURSUANT TO", "ORDERED AND ADJUDGED"
+            "WHEREAS", "PURSUANT TO", "ORDERED AND ADJUDGED",
+            "Writ Petition", "Civil Appeal", "Criminal Appeal",
+            "Special Leave Petition", "SLP", "AIR \d{4} SC \d+",  # e.g., AIR 2017 SC 1234
+            "Section \d+ of the",  # e.g., Section 377 of the
+            "[A-Z]+\. \d{4}"  # e.g., SCC 2017
         ]
         for phrase in noise_phrases:
-            text = text.replace(phrase, "")
+            text = re.sub(phrase, "", text, flags=re.IGNORECASE)
         return text.strip()
     except Exception as e:
         logger.error(f"Error in preprocessing: {str(e)}", exc_info=True)
@@ -235,6 +253,7 @@ def summarize_legal_text(text):
         start_time = time.time()
         
         summarizer = load_summarizer()
+        tokenizer = load_tokenizer()
         text = preprocess_legal_text(text)
         
         # Check word count for free trial
@@ -243,31 +262,55 @@ def summarize_legal_text(text):
             if word_count > FREE_WORD_LIMIT:
                 return f"Error: Free trial limited to {FREE_WORD_LIMIT} words. Please subscribe for unlimited processing."
 
-        # Adjust chunking for legal text (focus on sections like holdings, arguments)
+        # Adjust chunking for legal text (focus on token count instead of character count)
         if current_user.subscription_status == 'active':
-            max_length = 10000
-            chunk_size = 1000
+            max_length = 10000  # Character limit for the entire text
+            max_tokens_per_chunk = 512  # Safe token limit per chunk (BART max is 1024, we use half to be safe)
             max_chunks = 10
+            summary_max_length = 100  # Longer summaries for subscribed users
+            summary_min_length = 50
         else:
             max_length = 5000
-            chunk_size = 200
+            max_tokens_per_chunk = 256  # Smaller chunks for free users
             max_chunks = 5
+            summary_max_length = 50
+            summary_min_length = 30
         
         text = text[:max_length]
         # Split into meaningful legal sections (e.g., by paragraphs or headings)
         sections = re.split(r'\n\s*\n', text)  # Split by double newlines (paragraphs)
         chunks = []
         current_chunk = ""
+        current_tokens = 0
+
         for section in sections:
             section = section.strip()
             if not section:
                 continue
-            if len(current_chunk) + len(section) <= chunk_size:
-                current_chunk += " " + section
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                current_chunk = section
+            # Split long sections into smaller pieces if necessary
+            section_words = section.split()
+            temp_section = ""
+            for word in section_words:
+                temp_section += word + " "
+                temp_tokens = len(tokenizer.encode(temp_section.strip(), add_special_tokens=False))
+                if temp_tokens > max_tokens_per_chunk:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = temp_section.strip()
+                    current_tokens = temp_tokens
+                    temp_section = ""
+                    if len(chunks) >= max_chunks:
+                        break
+            if temp_section:
+                section_tokens = len(tokenizer.encode(temp_section.strip(), add_special_tokens=False))
+                if current_tokens + section_tokens <= max_tokens_per_chunk:
+                    current_chunk += " " + temp_section.strip()
+                    current_tokens += section_tokens
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = temp_section.strip()
+                    current_tokens = section_tokens
             if len(chunks) >= max_chunks:
                 break
         if current_chunk and len(chunks) < max_chunks:
@@ -279,15 +322,24 @@ def summarize_legal_text(text):
         summaries = []
         for i, chunk in enumerate(chunks):
             try:
+                # Manually truncate to 512 tokens to be extra safe
+                encoded = tokenizer.encode(chunk, add_special_tokens=True, truncation=True, max_length=512)
+                truncated_chunk = tokenizer.decode(encoded, skip_special_tokens=True)
                 # Summarize with a focus on legal outcomes and arguments
                 summary = summarizer(
-                    chunk,
-                    max_length=50,
-                    min_length=30,
+                    truncated_chunk,
+                    max_length=summary_max_length,
+                    min_length=summary_min_length,
                     do_sample=False,
                     truncation=True
                 )[0]['summary_text']
-                # Post-process to prioritize legal terms
+                # Post-process to prioritize legal outcomes and Indian judicial terms
+                legal_keywords = ["held", "dismissed", "upheld", "granted", "denied", "observed", "ruled", "constitution", "ipc"]
+                for keyword in legal_keywords:
+                    if keyword in summary.lower():
+                        # Prioritize sentences with legal outcomes
+                        summary = f"{keyword.capitalize()} {summary.split(keyword, 1)[1].strip()}"
+                        break
                 summary = re.sub(r'\b(the|is|are)\b', '', summary)  # Remove filler words
                 summaries.append(summary.strip())
                 logger.debug(f"Processed chunk {i+1}/{len(chunks)}")
@@ -325,7 +377,8 @@ def extract_legal_entities(text):
             "Dates": set(),
             "Laws": set(),
             "Case Numbers": set(),
-            "Citations": set()
+            "Citations": set(),
+            "Indian Statutes": set()
         }
         
         for ent in doc.ents:
@@ -335,7 +388,7 @@ def extract_legal_entities(text):
                 else:
                     legal_tags["Parties"].add(ent.text)
             elif ent.label_ == "ORG":
-                if "court" in ent.text.lower() or "high court" in ent.text.lower():
+                if "court" in ent.text.lower() or "tribunal" in ent.text.lower():
                     legal_tags["Courts"].add(ent.text)
             elif ent.label_ == "DATE":
                 legal_tags["Dates"].add(ent.text)
@@ -345,13 +398,23 @@ def extract_legal_entities(text):
                 if any(word in ent.text.lower() for word in ["no.", "number"]):
                     legal_tags["Case Numbers"].add(ent.text)
         
+        # Enhanced entity extraction for Indian judicial contexts
         for sent in doc.sents:
-            if " v. " in sent.text:
-                parts = [p.strip() for p in sent.text.split(" v. ")]
+            sent_text = sent.text
+            # Parties (e.g., "Shri Justice C.S. Karnan vs Registrar General")
+            if " v. " in sent_text or " vs. " in sent_text:
+                parts = [p.strip() for p in sent_text.replace(" vs. ", " v. ").split(" v. ")]
                 if len(parts) == 2:
                     legal_tags["Parties"].update(parts)
-            if any(c in sent.text for c in [" U.S. ", " F. ", " S.Ct. ", " A.C. "]):
-                legal_tags["Citations"].add(sent.text.strip())
+            # Citations (e.g., AIR 2017 SC 1234, (2017) 2 SCC 123)
+            if re.search(r"\b(AIR \d{4} SC \d+|SCC \d{4}\b|\(\d{4}\))", sent_text):
+                legal_tags["Citations"].add(sent_text.strip())
+            # Indian Statutes (e.g., Section 377 IPC, Article 21 of the Constitution)
+            if re.search(r"(Section \d+ [A-Z]+|Article \d+ of the Constitution)", sent_text):
+                legal_tags["Indian Statutes"].add(sent_text.strip())
+            # Courts (e.g., Supreme Court of India, Madras High Court)
+            if re.search(r"(Supreme Court of India|High Court of [A-Za-z]+)", sent_text):
+                legal_tags["Courts"].add(sent_text.strip())
         
         result = {k: sorted(v) for k, v in legal_tags.items() if v}
         logger.info(f"Entity extraction completed in {time.time() - start_time:.2f}s")
@@ -464,7 +527,7 @@ def create_subscription():
             try:
                 customer = razorpay_client.customer.create({
                     'name': current_user.username,
-                    'email': f"{current_user.username}@example.com",  # Placeholder email
+                    'email': f"{current_user.username.split('@')[0]}@example.com",  # Strip existing domain and use a valid one
                     'contact': '9000000000'
                 })
                 current_user.razorpay_customer_id = customer['id']
