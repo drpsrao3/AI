@@ -737,6 +737,11 @@ def account():
         logger.error(f"Error in account route: {str(e)}", exc_info=True)
         return render_template('error.html', message="Account Error"), 500
 
+# Health check endpoint for Render
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"}), 200
+
 @app.errorhandler(404)
 def page_not_found(e):
     return render_template('error.html', message="Page not found"), 404

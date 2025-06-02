@@ -1,20 +1,7 @@
-# Virtual environment
-venv/
-
-# Instance directory (local SQLite, uploads)
-instance/
-
-# Python cache files
-__pycache__/
-*.pyc
-
-# Environment variables
 .env
-
-# macOS/Windows artifacts
-.DS_Store
-Thumbs.db
-
-# Temporary dependency artifacts
-0.21.0+cpu/"__pycache__/" 
-"*.pyc" 
+__pycache__/
+instance/
+migrations/__pycache__/
+migrations/versions/__pycache__/
+venv/
+psql
