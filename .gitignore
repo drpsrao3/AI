@@ -1,7 +1,15 @@
-.env
+# Python
 __pycache__/
-instance/
-migrations/__pycache__/
-migrations/versions/__pycache__/
+*.py[cod]
+*.env
+*.sqlite
 venv/
-psql
+env/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+
+# Instance folder (Flask)
+instance/
