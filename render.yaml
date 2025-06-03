@@ -1,28 +1,17 @@
 services:
   - type: web
-    name: caseprep-ai
-    env: python
-    plan: free # or starter/professional depending on needs
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    name: casesummarizer
+    runtime: python
+    buildCommand: "pip install -r requirements.txt && flask db upgrade"
+    startCommand: "gunicorn app:app"
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.12
       - key: DATABASE_URL
         fromDatabase:
-          name: caseprep-db
+          name: casesummarizer-db
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
       - key: RAZORPAY_KEY_ID
-        value: rzp_test_IUOc4j25Yk0fY4
+        sync: false
       - key: RAZORPAY_KEY_SECRET
-        value: Usk7AxjpN2bjhOUzESGRJ5lv
-      - key: RAZORPAY_PLAN_ID
-        value: plan_QYOJindZWhIN0V
-      - key: RAZORPAY_WEBHOOK_SECRET
-        value: webhook_secret_12345
-  databases:
-    - name: caseprep-db
-      databaseName: drpsrao3_1
-      user: drpsrao3_1_user
+        sync: false
