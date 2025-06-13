@@ -64,42 +64,53 @@ except Exception as e:
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
-# Database configuration with error handling
+# Replace the database configuration section in app.py
 database_url = os.getenv('DATABASE_URL')
-logger.debug(f"Raw DATABASE_URL from environment: {database_url}")
+logger.debug(f"Raw DATABASE_URL from environment: {'[hidden]' if os.getenv('RENDER') else database_url}")
 if database_url:
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    # Ensure sslmode=require and add SSL root certificate
+    if 'sslmode' not in database_url:
+        database_url += '?sslmode=require'
+    # Optional: Specify SSL root certificate (Render may require this)
+    if os.getenv('RENDER'):
+        database_url += '&sslrootcert=/etc/ssl/certs/ca-certificates.crt'
 else:
-    # Raise an error on Render to prevent fallback to SQLite
-    if os.getenv('RENDER'):  # Render sets this environment variable
+    if os.getenv('RENDER'):
         logger.error("DATABASE_URL environment variable is not set on Render. This is required.")
         raise ValueError("DATABASE_URL environment variable is not set on Render. This is required.")
-    # Local development fallback (cross-platform)
     db_dir = os.path.join(app.instance_path, 'db')
-    try:
-        os.makedirs(db_dir, exist_ok=True)
-        logger.debug(f"Created database directory: {db_dir}")
-    except Exception as e:
-        logger.error(f"Failed to create database directory: {str(e)}")
-        raise
+    os.makedirs(db_dir, exist_ok=True)
     db_path = os.path.join(db_dir, 'users.db')
     logger.info(f"Local database path (SQLite): {db_path}")
     database_url = f"sqlite:///{db_path}"
-logger.debug(f"Configured database URL: {database_url}")
+logger.debug(f"Configured database URL: {'[hidden]' if os.getenv('RENDER') else database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_timeout': 10,
+    'pool_recycle': 300,
+    'connect_args': {'sslmode': 'require', 'sslrootcert': '/etc/ssl/certs/ca-certificates.crt' if os.getenv('RENDER') else None}
+}
 
 # Initialize SQLAlchemy, Migrate, and Bcrypt
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 
-# Test database connection
-try:
+# Test database connection with retry logic
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+def test_db_connection():
     with app.app_context():
-        db.session.execute(text('SELECT 1'))  # Use text() for raw SQL
+        db.session.execute(text('SELECT 1'))
         logger.info("Database connection successful")
+
+try:
+    test_db_connection()
 except sqlalchemy.exc.OperationalError as e:
     logger.error(f"Database connection failed: {str(e)}")
     raise RuntimeError(f"Failed to connect to the database: {str(e)}. Check DATABASE_URL and database availability.")
@@ -440,17 +451,17 @@ def login():
             username = request.form.get('username', '').strip()
             password = request.form.get('password', '').strip()
             
-            logger.debug(f"Received login request with username: {username}")
+            logger.debug(f"Received login request with username: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
             
             if not username or not password:
                 logger.warning("Username or password missing in login request")
                 flash('Username and password are required', 'error')
                 return redirect(url_for('login'))
             
-            logger.debug(f"Querying database for username: {username}")
+            logger.debug(f"Querying database for username: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
             user_query = User.query.filter_by(username=username).first()
             if not user_query:
-                logger.warning(f"No user found with username: {username}")
+                logger.warning(f"No user found with username: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
                 flash('Invalid username or password', 'error')
                 return redirect(url_for('login'))
             
@@ -461,16 +472,16 @@ def login():
                 flash('Invalid username or password', 'error')
                 return redirect(url_for('login'))
             
-            logger.debug(f"Verifying password for user: {username}")
+            logger.debug(f"Verifying password for user: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
             if bcrypt.check_password_hash(user.password, password):
-                logger.debug(f"Password verified, logging in user: {username}")
+                logger.debug(f"Password verified, logging in user: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
                 login_user(user)
-                logger.info(f"User {username} logged in successfully")
+                logger.info(f"User {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'} logged in successfully")
                 flash('Logged in successfully', 'success')
                 next_page = request.args.get('next')
                 return redirect(next_page or url_for('index'))
             else:
-                logger.warning(f"Password verification failed for user: {username}")
+                logger.warning(f"Password verification failed for user: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
                 flash('Invalid username or password', 'error')
                 return redirect(url_for('login'))
         
@@ -488,7 +499,7 @@ def register():
             password = request.form.get('password', '').strip()
             confirm_password = request.form.get('confirm_password', '').strip()
             
-            logger.debug(f"Received registration form data: {request.form}")
+            logger.debug(f"Received registration form data with username: {username[:4] + '...' + username.split('@')[-1] if '@' in username else 'hidden'}")
             
             if not username or not password:
                 flash('Username and password are required', 'error')
@@ -730,9 +741,15 @@ def upload_file():
 @login_required
 def account():
     try:
+        user_data = {
+            'username': current_user.username,
+            'subscription_status': current_user.subscription_status,
+            'upload_count': current_user.upload_count,
+            'subscription_end_date': current_user.subscription_end_date
+        }
         return render_template('account.html', 
-                            user=current_user,
-                            is_premium=current_user.subscription_status == 'active')
+                             user=user_data,
+                             is_premium=current_user.subscription_status == 'active')
     except Exception as e:
         logger.error(f"Error in account route: {str(e)}", exc_info=True)
         return render_template('error.html', message="Account Error"), 500

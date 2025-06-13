@@ -1,19 +1,20 @@
 # migrate.py
 from app import app, db
-from flask_migrate import upgrade, migrate, init, stamp
+from flask_migrate import upgrade, migrate, init
+import os
 
 with app.app_context():
     try:
-        # Initialize migration repository if it doesn't exist
-        init()
+        if not os.path.exists('migrations'):
+            print("Initializing migration repository...")
+            init()
+        else:
+            print("Migration repository already initialized")
+        print("Generating migration scripts...")
+        migrate(message="Create user table")
+        print("Applying migrations...")
+        upgrade()
+        print("Migrations applied successfully")
     except Exception as e:
-        print(f"Migration repository already initialized: {e}")
-
-    # Create a stamp for the initial migration
-    stamp()
-
-    # Generate migration scripts for the current model
-    migrate(message="Initial migration")
-
-    # Apply migrations to the database
-    upgrade()
+        print(f"Error during migration: {str(e)}")
+        raise
