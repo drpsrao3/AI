@@ -70,12 +70,9 @@ logger.debug(f"Raw DATABASE_URL from environment: {'[hidden]' if os.getenv('REND
 if database_url:
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    # Ensure sslmode=require and add SSL root certificate
+    # Ensure sslmode=require
     if 'sslmode' not in database_url:
         database_url += '?sslmode=require'
-    # Optional: Specify SSL root certificate (Render may require this)
-    if os.getenv('RENDER'):
-        database_url += '&sslrootcert=/etc/ssl/certs/ca-certificates.crt'
 else:
     if os.getenv('RENDER'):
         logger.error("DATABASE_URL environment variable is not set on Render. This is required.")
@@ -88,12 +85,21 @@ else:
 logger.debug(f"Configured database URL: {'[hidden]' if os.getenv('RENDER') else database_url}")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
-    'pool_timeout': 10,
-    'pool_recycle': 300,
-    'connect_args': {'sslmode': 'require', 'sslrootcert': '/etc/ssl/certs/ca-certificates.crt' if os.getenv('RENDER') else None}
-}
+
+# Configure SQLALCHEMY_ENGINE_OPTIONS conditionally for SSL on Render
+if os.getenv('RENDER'):
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_timeout': 10,
+        'pool_recycle': 300,
+        'connect_args': {'sslmode': 'require', 'sslrootcert': '/etc/ssl/certs/ca-certificates.crt'}
+    }
+else:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_timeout': 10,
+        'pool_recycle': 300,
+    }
 
 # Initialize SQLAlchemy, Migrate, and Bcrypt
 db = SQLAlchemy(app)
